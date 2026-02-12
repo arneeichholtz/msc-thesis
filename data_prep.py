@@ -19,24 +19,23 @@ from features_config.features import (
     fb_labels,
     manner_labels,
     phonation_labels,
-    phoneme_mapping,
     place_labels,
     round_labels,
+    mv_data,
+    phoneme_mapping,
 )
 
 TARGET_SAMPLING_RATE = 16_000
 WAV2VEC2_FRAME_STRIDE = 320  # wav2vec2 stride in audio samples (20 ms at 16 kHz)
 MIN_AUDIO_SAMPLES = WAV2VEC2_FRAME_STRIDE  # drop utterances shorter than one frame
 
-
 @dataclass(frozen=True)
 class FeatureGroup:
     name: str
     labels: List[str]
 
-
 # Ordered feature groups matching the k=6 articulatory features
-FEATURE_GROUPS: Tuple[FeatureGroup, ...] = (
+FEATURE_GROUPS = (
     FeatureGroup("phonation", list(phonation_labels.keys())),
     FeatureGroup("manner", list(manner_labels.keys())),
     FeatureGroup("place", list(place_labels.keys())),
@@ -45,14 +44,10 @@ FEATURE_GROUPS: Tuple[FeatureGroup, ...] = (
     FeatureGroup("centrality", list(central_labels.keys())),
 )
 
-GROUP_SIZES: Tuple[int, ...] = tuple(len(group.labels) for group in FEATURE_GROUPS)
-GROUP_OFFSETS: Tuple[int, ...] = tuple(
-    sum(GROUP_SIZES[:idx]) for idx in range(len(GROUP_SIZES))
-)
-BINARY_FEATURE_DIM: int = sum(GROUP_SIZES)
+GROUP_SIZES = tuple(len(group.labels) for group in FEATURE_GROUPS)      # Will be (3, 6, 9, 4, 3, 4)
+GROUP_OFFSETS = tuple(sum(GROUP_SIZES[:idx]) for idx in range(len(GROUP_SIZES)))        # Will be (0, 3, 9, 18, 22, 25)
 
-FULL_PHONEME_IDX_DICT, CANONICAL_PHONEME_IDX_DICT = phoneme_processing()
-
+BINARY_FEATURE_DIM = sum(GROUP_SIZES)                                   # Is 29
 
 def _indices_to_binary_vector(index_vector: Iterable[int]) -> np.ndarray:
     """Convert a length-6 index vector into a flattened multi-hot numpy array."""
@@ -61,16 +56,6 @@ def _indices_to_binary_vector(index_vector: Iterable[int]) -> np.ndarray:
         offset = GROUP_OFFSETS[group_idx]
         binary[offset + int(feature_index)] = 1.0
     return binary
-
-
-PHONEME_BINARY_FEATURES: Dict[str, np.ndarray] = {
-    phoneme: _indices_to_binary_vector(index_vector)
-    for phoneme, index_vector in CANONICAL_PHONEME_IDX_DICT.items()
-}
-
-SILENCE_VECTOR: np.ndarray = PHONEME_BINARY_FEATURES.get(
-    "sil", np.zeros(BINARY_FEATURE_DIM, dtype=np.float32)
-)
 
 
 def phoneme_processing():
@@ -104,25 +89,41 @@ def phoneme_processing():
     return full_phoneme_feature_dict, phoneme_feature_dict
 
 
+_, CANONICAL_PHONEME_IDX_DICT = phoneme_processing()        # Maps phoneme labels to their corresponding feature index vectors, like 'g': [0, 1, 6, 0, 0, 2],
+
+PHONEME_BINARY_FEATURES: Dict[str, np.ndarray] = {          # Converts phoneme to corresponding binary feature vector
+    phoneme: _indices_to_binary_vector(index_vector)
+    for phoneme, index_vector in CANONICAL_PHONEME_IDX_DICT.items()
+}
+
+SILENCE_VECTOR: np.ndarray = PHONEME_BINARY_FEATURES.get(
+    "sil", np.zeros(BINARY_FEATURE_DIM, dtype=np.float32)
+)
+
 def canonicalize_phoneme(raw_phoneme: str) -> str:
-    """Map raw TIMIT phoneme labels to the 39+1 canonical inventory."""
+    """Map raw TIMIT phoneme labels to the 39+1 canonical inventory. Raise ValueError if no mapping exists."""
     key = raw_phoneme.lower()
-    return phoneme_mapping.get(key, key)
+    mapped_phoneme = phoneme_mapping.get(key, None)
+    if not mapped_phoneme:
+        raise ValueError(f"Phoneme '{raw_phoneme}' not found in mapping. Check phoneme_mapping for missing entries.")
+    else: 
+        return mapped_phoneme
 
 
 def prepare_dataset(batch: Dict) -> Dict:
     """Frame-align articulatory feature vectors for a single TIMIT example."""
     audio = batch["audio"]
-    waveform = np.asarray(audio["array"], dtype=np.float32)
-    print("shape: ", waveform.shape)
+    waveform = np.asarray(audio["array"], dtype=np.float32)         # E.g. shaped: (50434,)
     sampling_rate = audio["sampling_rate"]
 
     if sampling_rate != TARGET_SAMPLING_RATE:
-        raise ValueError(
-            f"Expected {TARGET_SAMPLING_RATE} Hz audio but received {sampling_rate} Hz."
-        )
+        raise ValueError(f"Expected {TARGET_SAMPLING_RATE} Hz audio but received {sampling_rate} Hz.")
 
-    num_frames = int(len(waveform) // WAV2VEC2_FRAME_STRIDE)
+    num_frames = math.floor(len(waveform) / WAV2VEC2_FRAME_STRIDE)        # Floor divide to get number of full frames, e.g. 50434 // 320 = 157. Remaining values are discarded
+    
+    if num_frames == 0:
+        raise ValueError(f"Audio too short for wav2vec2 frame alignment: {len(waveform)} samples.")
+    
     frame_labels = np.zeros((num_frames, BINARY_FEATURE_DIM), dtype=np.float32)
 
     starts = batch["phonetic_detail"]["start"]
@@ -130,23 +131,20 @@ def prepare_dataset(batch: Dict) -> Dict:
     phonemes = batch["phonetic_detail"]["utterance"]
 
     for start, stop, phoneme in zip(starts, stops, phonemes):
-        if num_frames == 0:
-            break
-
         canonical = canonicalize_phoneme(phoneme)
-        feature_vector = PHONEME_BINARY_FEATURES.get(canonical, SILENCE_VECTOR)
+        feature_vector = PHONEME_BINARY_FEATURES.get(canonical, SILENCE_VECTOR)     # Use the silence vector for unmapped phonemes, though phonemes in TIMIT and defined phoneme mapping should be the same
 
-        frame_start = int(max(0, min(num_frames, math.floor(start / WAV2VEC2_FRAME_STRIDE))))
-        frame_stop = int(max(frame_start + 1, math.ceil(stop / WAV2VEC2_FRAME_STRIDE)))
-        frame_stop = min(frame_stop, num_frames)
+        frame_start = math.floor(start / WAV2VEC2_FRAME_STRIDE)          # Floor division so first phoneme will start at 0
+        frame_stop = math.ceil(stop / WAV2VEC2_FRAME_STRIDE)             # Ceil rounding so 6.2 frames is 7 frames
+        frame_stop = min(frame_stop, num_frames)                         # Ensure remaining values after num_frames are discarded; often this is sil
 
-        if frame_start >= frame_stop:
+        if frame_start >= frame_stop:       # Skip phonemes with stop-start < stride; ~1% of phonemes
             continue
 
-        frame_labels[frame_start:frame_stop] = feature_vector
-
+        frame_labels[frame_start:frame_stop] = feature_vector           # Overwrite first index of frame_labels
+    
     if num_frames > 0:
-        unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]
+        unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]         # Will be non-empty if first time step (starts) is not 0
         if len(unassigned) > 0:
             frame_labels[unassigned] = SILENCE_VECTOR
 
@@ -158,30 +156,13 @@ def prepare_dataset(batch: Dict) -> Dict:
 
 
 def load_timit_dataset() -> DatasetDict | IterableDatasetDict:
-    """Load and resample the TIMIT ASR dataset at 16 kHz."""
+    """Load the TIMIT ASR dataset, sample validation set and resample at 16 kHz."""
     dataset = load_dataset("timit_asr")
+    train_val_split = dataset["train"].train_test_split(test_size=0.1, seed=42)
+    dataset = DatasetDict({
+        "train": train_val_split["train"],
+        "validation": train_val_split["test"],
+        "test": dataset["test"]           
+    })
     return dataset.cast_column("audio", Audio(sampling_rate=TARGET_SAMPLING_RATE))
 
-
-def filter_short_audio(dataset: DatasetDict | IterableDatasetDict) -> DatasetDict | IterableDatasetDict:
-    """Drop utterances shorter than one wav2vec2 frame."""
-    return dataset.filter(
-        lambda example: len(example["audio"]["array"]) >= MIN_AUDIO_SAMPLES
-    )
-
-
-if __name__ == "__main__":
-    timit = load_timit_dataset()
-    timit = filter_short_audio(timit)
-
-    processed = timit.map(
-        prepare_dataset,
-        desc="Preparing TIMIT for CBM training",
-    )
-
-    print("Binary feature dimensionality:", BINARY_FEATURE_DIM)
-    for split in processed.keys():
-        print(
-            f"Split {split}: {len(processed[split])} examples, "
-            f"example[0] num_frames={processed[split][0]['num_frames']}"
-        )

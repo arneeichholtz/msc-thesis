@@ -8,7 +8,8 @@ import torch
 from torch import nn
 from torch.nn import BCEWithLogitsLoss
 
-from transformers import SequenceClassifierOutput, Wav2Vec2Model, Wav2Vec2PreTrainedModel
+from transformers import Wav2Vec2Model, Wav2Vec2PreTrainedModel
+from transformers.modeling_outputs import SequenceClassifierOutput
 
 
 class Wav2Vec2ForArticulatoryFeatures(Wav2Vec2PreTrainedModel):
@@ -20,14 +21,13 @@ class Wav2Vec2ForArticulatoryFeatures(Wav2Vec2PreTrainedModel):
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.loss_fn = BCEWithLogitsLoss(reduction="none")
 
-        for param in self.wav2vec2.feature_extractor.parameters():
-            param.requires_grad = False
+        self.wav2vec2.requires_grad_(False)         # Freeze all wav2vec2 params
 
         self.post_init()
 
     def _compute_attention_mask(
         self,
-    attention_mask: Optional[torch.Tensor],
+        attention_mask: Optional[torch.Tensor],
         target_length: int,
         batch_size: int,
         device: torch.device,
