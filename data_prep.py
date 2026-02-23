@@ -44,6 +44,15 @@ FEATURE_GROUPS = (
     FeatureGroup("centrality", list(central_labels.keys())),
 )
 
+FEATURE_GROUPS_LABELS = (
+    FeatureGroup("phonation", list(phonation_labels.values())),
+    FeatureGroup("manner", list(manner_labels.values())),
+    FeatureGroup("place", list(place_labels.values())),
+    FeatureGroup("front_back", list(fb_labels.values())),
+    FeatureGroup("roundness", list(round_labels.values())),
+    FeatureGroup("centrality", list(central_labels.values())),
+)
+
 GROUP_SIZES = tuple(len(group.labels) for group in FEATURE_GROUPS)      # Will be (3, 6, 9, 4, 3, 4)
 GROUP_OFFSETS = tuple(sum(GROUP_SIZES[:idx]) for idx in range(len(GROUP_SIZES)))        # Will be (0, 3, 9, 18, 22, 25)
 
@@ -51,7 +60,7 @@ BINARY_FEATURE_DIM = sum(GROUP_SIZES)                                   # Is 29
 
 def _indices_to_binary_vector(index_vector: Iterable[int]) -> np.ndarray:
     """Convert a length-6 index vector into a flattened multi-hot numpy array."""
-    binary = np.zeros(BINARY_FEATURE_DIM, dtype=np.float32)
+    binary = np.zeros(BINARY_FEATURE_DIM, dtype=np.int8)
     for group_idx, feature_index in enumerate(index_vector):
         offset = GROUP_OFFSETS[group_idx]
         binary[offset + int(feature_index)] = 1.0
@@ -97,7 +106,7 @@ PHONEME_BINARY_FEATURES: Dict[str, np.ndarray] = {          # Converts phoneme t
 }
 
 SILENCE_VECTOR: np.ndarray = PHONEME_BINARY_FEATURES.get(
-    "sil", np.zeros(BINARY_FEATURE_DIM, dtype=np.float32)
+    "sil", np.zeros(BINARY_FEATURE_DIM, dtype=np.int8)
 )
 
 def canonicalize_phoneme(raw_phoneme: str) -> str:
@@ -124,7 +133,7 @@ def prepare_dataset(batch: Dict) -> Dict:
     if num_frames == 0:
         raise ValueError(f"Audio too short for wav2vec2 frame alignment: {len(waveform)} samples.")
     
-    frame_labels = np.zeros((num_frames, BINARY_FEATURE_DIM), dtype=np.float32)
+    frame_labels = np.zeros((num_frames, BINARY_FEATURE_DIM), dtype=np.int8)
 
     starts = batch["phonetic_detail"]["start"]
     stops = batch["phonetic_detail"]["stop"]
@@ -141,10 +150,10 @@ def prepare_dataset(batch: Dict) -> Dict:
         if frame_start >= frame_stop:       # Skip phonemes with stop-start < stride; ~1% of phonemes
             continue
 
-        frame_labels[frame_start:frame_stop] = feature_vector           # Overwrite first index of frame_labels
+        frame_labels[frame_start:frame_stop] = feature_vector            # Overwrite first index of frame_labels
     
     if num_frames > 0:
-        unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]         # Will be non-empty if first time step (starts) is not 0
+        unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]          # Will be non-empty if first time step (starts) is not 0
         if len(unassigned) > 0:
             frame_labels[unassigned] = SILENCE_VECTOR
 

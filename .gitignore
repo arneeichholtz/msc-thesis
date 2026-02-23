@@ -1,3 +1,6 @@
 test.py
 *.rtf
 wav2vec2-cbm-checkpoints/
+outputs/
+.env
+wandb/

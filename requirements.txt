@@ -1,0 +1,22 @@
+# Core Scientific Stack
+numpy==1.23.5
+pandas
+matplotlib
+scikit-learn
+tqdm
+librosa
+ipython
+wandb
+python-dotenv
+
+# PyTorch Ecosystem (Note: Installation usually requires a specific URL for CUDA)
+torch
+torchvision
+torchaudio
+
+# NLP and Utility (Originally under your pip section)
+datasets==1.18.3
+pyarrow==6.0.1
+transformers
+jiwer
+accelerate>=0.26.0

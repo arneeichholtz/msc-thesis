@@ -1,19 +1,21 @@
 model_checkpoint: facebook/wav2vec2-base    # Will be used for model and processor
-output_dir: ./wav2vec2-cbm-checkpoints
+output_dir: /projects/0/prjs1921/thesis-speech/model_checkpoints
 eval_strategy: steps
-learning_rate: 0.0003
-per_device_train_batch_size: 4
-per_device_eval_batch_size: 4
-num_train_epochs: 10
-logging_steps: 100
-save_steps: 1000
-save_total_limit: 2
+learning_rate: 0.0001
+per_device_train_batch_size: 32
+per_device_eval_batch_size: 32
+num_train_epochs: 20
+logging_steps: 50
+save_steps: 500
+eval_steps: 500
+warmup_steps: 1000
+save_total_limit: 1
 use_fp16: True
 
-use_initial_unfreeze: False     # If True, unfreeze specified wav2vec2 encoder layers from the start of training
-unfreeze_layers: None           # List of wav2vec2 encoder layer indices to unfreeze from the start of training (e.g., [8, 9, 10, 11] to unfreeze the last 4 layers)  
+use_initial_unfreeze: True      # If True, unfreeze specified wav2vec2 encoder layers from the start of training
+unfreeze_layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]           # List of wav2vec2 encoder layer indices to unfreeze from the start of training (e.g., [8, 9, 10, 11] to unfreeze the last 4 layers)  
 use_callback_unfreeze: False    # If True, use UnfreezingCallback to unfreeze the wav2vec2 encoder (Transformer layers) after a specified number of steps
 thaw_step: 1000                 # Number of steps after which to unfreeze the wav2vec2 encoder (Transformer layers)
 
-wandb_project: thesis-cbm      # WandB project name for logging training runs
-run_name: wav2vec2-cbm-indep
+wandb_project: thesis-cbm       # WandB project name for logging training runs
+run_name: wav2vec2-cbm-cl-ul0_11

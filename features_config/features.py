@@ -3,12 +3,12 @@
 # ---------------- King & Taylor paper ----------------
 
 # Phonological features, both their label used in the paper and label in natural language
-phonation_labels = {"v": "Voiced", "uv": "Unvoiced", "s": "silence"}
-manner_labels    = {"v": "Vowel", "o": "Occlusive", "a": "Approximant", "n": "Nasal", "f": "Fricative", "s": "silence"}
-place_labels     = {"lo": "Low", "m": "Mid", "h": "High", "l": "Labial", "c": "Coronal", "d": "Dental", "v": "Velar", "g": "Glottal", "s": "silence"}
-fb_labels        = {"b": "Back", "f": "Front", "n": "Neutral", "s": "silence"}
-round_labels     = {"u": "Unrounded", "r": "Rounded", "s": "silence"}
-central_labels   = {"c": "Central", "f": "Full", "n": "nil", "s": "silence"}
+phonation_labels = {"v": "Voiced", "uv": "Unvoiced", "s_p": "silence_phonation"}
+manner_labels    = {"v": "Vowel", "o": "Occlusive", "a": "Approximant", "n": "Nasal", "f": "Fricative", "s_m": "silence_manner"}
+place_labels     = {"lo": "Low", "m": "Mid", "h": "High", "l": "Labial", "c": "Coronal", "d": "Dental", "v": "Velar", "g": "Glottal", "s_pl": "silence_place"}
+fb_labels        = {"b": "Back", "f": "Front", "n": "Neutral", "s_fb": "silence_fb"}
+round_labels     = {"u": "Unrounded", "r": "Rounded", "s_r": "silence_round"}
+central_labels   = {"c": "Central", "f": "Full", "n": "nil", "s_c": "silence_central"}
 
 # Data extracted from the King & Taylor Appendix (MV System) 
 mv_data = {
@@ -71,7 +71,7 @@ mv_data = {
     "y":    ["v", "a", "v", "b", "u", "n"],
     "z":    ["v", "f", "c", "f", "u", "n"],
     "zh":   ["v", "f", "c", "f", "u", "n"],
-    "sil":  ["s", "s", "s", "s", "s", "s"] 
+    "sil":  ["s_p", "s_m", "s_pl", "s_fb", "s_r", "s_c"] 
 }
 
 phoneme_mapping = {
