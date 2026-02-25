@@ -13,6 +13,9 @@ from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 from datasets import Audio, DatasetDict, IterableDatasetDict, load_dataset
+from transformers import Wav2Vec2FeatureExtractor
+
+# from vocab import get_phoneme_vocab
 
 from features_config.features import (
     central_labels,
@@ -22,7 +25,7 @@ from features_config.features import (
     place_labels,
     round_labels,
     mv_data,
-    phoneme_mapping,
+    phoneme_mapping
 )
 
 TARGET_SAMPLING_RATE = 16_000
@@ -98,6 +101,21 @@ def phoneme_processing():
     return full_phoneme_feature_dict, phoneme_feature_dict
 
 
+def get_phoneme_vocab():
+    """Return a phoneme vocabulary mapping token -> id.
+
+    ID 0 is reserved for "<pad>" (CTC blank).
+    Remaining IDs are assigned to unique phoneme tokens sorted alphabetically.
+    """
+    unique_tokens = sorted(set(phoneme_mapping.values()))
+    if "q" in unique_tokens:            # Remove the glottal stop 'q'
+        unique_tokens.remove("q")
+    
+    token_to_id = {"<pad>": 0}
+    token_to_id.update({token: idx + 1 for idx, token in enumerate(unique_tokens)})
+    return token_to_id
+
+
 _, CANONICAL_PHONEME_IDX_DICT = phoneme_processing()        # Maps phoneme labels to their corresponding feature index vectors, like 'g': [0, 1, 6, 0, 0, 2],
 
 PHONEME_BINARY_FEATURES: Dict[str, np.ndarray] = {          # Converts phoneme to corresponding binary feature vector
@@ -108,6 +126,8 @@ PHONEME_BINARY_FEATURES: Dict[str, np.ndarray] = {          # Converts phoneme t
 SILENCE_VECTOR: np.ndarray = PHONEME_BINARY_FEATURES.get(
     "sil", np.zeros(BINARY_FEATURE_DIM, dtype=np.int8)
 )
+
+PHONEME_VOCAB = get_phoneme_vocab()
 
 def canonicalize_phoneme(raw_phoneme: str) -> str:
     """Map raw TIMIT phoneme labels to the 39+1 canonical inventory. Raise ValueError if no mapping exists."""
@@ -164,14 +184,46 @@ def prepare_dataset(batch: Dict) -> Dict:
     return batch
 
 
-def load_timit_dataset() -> DatasetDict | IterableDatasetDict:
+def compute_inputs(batch: Dict, feature_extractor: Wav2Vec2FeatureExtractor) -> Dict:
+    """Prepare raw audio samples for wav2vec2 input features using feature extractor. This will standardize (0-mean) the data."""
+    audio_arrays = [item["array"] for item in batch["audio"]]       # Length batch size
+    extractor_outputs = feature_extractor(
+        audio_arrays,
+        sampling_rate=TARGET_SAMPLING_RATE,
+        return_attention_mask=False,            # This is advised for wav2vec2-base specifically.
+    )
+    batch["input_values"] = extractor_outputs["input_values"]
+    return batch
+
+
+def load_timit_dataset(sample_validation_set: bool = True, sample_validation_size: float = 0.1) -> DatasetDict | IterableDatasetDict:
     """Load the TIMIT ASR dataset, sample validation set and resample at 16 kHz."""
     dataset = load_dataset("timit_asr")
-    train_val_split = dataset["train"].train_test_split(test_size=0.1, seed=42)
-    dataset = DatasetDict({
-        "train": train_val_split["train"],
-        "validation": train_val_split["test"],
-        "test": dataset["test"]           
-    })
-    return dataset.cast_column("audio", Audio(sampling_rate=TARGET_SAMPLING_RATE))
+    dataset = dataset.cast_column("audio", Audio(sampling_rate=TARGET_SAMPLING_RATE))
+    if sample_validation_set:
+        train_val_split = dataset["train"].train_test_split(test_size=sample_validation_size, seed=42)
+        dataset = DatasetDict({
+            "train": train_val_split["train"],
+            "validation": train_val_split["test"],
+            "test": dataset["test"]           
+        })
+    return dataset
+
+
+def phoneme_sequence_to_ids(phonemes: List[str]) -> List[int]:
+    ids: List[int] = []
+    for phoneme in phonemes:
+        canonical = canonicalize_phoneme(phoneme)
+        try:
+            ids.append(PHONEME_VOCAB[canonical])
+        except KeyError as exc:
+            raise KeyError(f"Phoneme '{canonical}' not found in vocabulary") from exc
+    return ids
+
+
+def format_for_ctc(batch):
+    return {
+        "input_values": batch["labels"],                # The frame labels are the inputs for CTC
+        "labels": phoneme_sequence_to_ids(batch["phonetic_detail"]["utterance"])
+    }
 

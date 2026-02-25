@@ -107,11 +107,11 @@ class LinearCTCModel(nn.Module):
     def __init__(self, input_dim: int = 29, output_dim: int = 0):
         super().__init__()
         self.linear = nn.Linear(input_dim, output_dim)
-        self.ctc_loss = nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)
+        self.ctc_loss = nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)           # Zero_infitiy to True means infinite losses are set to 0. This can happen when eg the target seq is longer than the input
 
     def forward(self, input_values, attention_mask, labels=None):
         logits = self.linear(input_values)
-        log_probs = F.log_softmax(logits, dim=-1)
+        log_probs = F.log_softmax(logits, dim=-1)       # CTC loss expects log_probs
 
         output = {"logits": logits}
 

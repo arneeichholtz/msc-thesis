@@ -16,10 +16,10 @@ from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_sc
 from transformers import (
     Trainer,
     TrainingArguments,
-    Wav2Vec2FeatureExtractor,
+    Wav2Vec2FeatureExtractor
 )
 
-from datasets import DatasetDict
+from datasets import DatasetDict, load_from_disk
 
 from callbacks import UnfreezingCallback, unfreeze_encoder_layers
 from data_prep import (
@@ -27,6 +27,7 @@ from data_prep import (
     TARGET_SAMPLING_RATE,
     load_timit_dataset,
     prepare_dataset,
+    compute_inputs,
     FEATURE_GROUPS_LABELS
 )
 from model import Wav2Vec2ForArticulatoryFeatures
@@ -78,18 +79,7 @@ class ArticulatoryFeatureDataCollator:
 def load_training_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as fp:
         return yaml.safe_load(fp)
-
-
-def compute_inputs(batch: Dict, feature_extractor: Wav2Vec2FeatureExtractor) -> Dict:
-    """Prepare raw audio samples for wav2vec2 input features using feature extractor. This will standardize (0-mean) the data."""
-    audio_arrays = [item["array"] for item in batch["audio"]]       # Length batch size
-    extractor_outputs = feature_extractor(
-        audio_arrays,
-        sampling_rate=TARGET_SAMPLING_RATE,
-        return_attention_mask=False,            # This is advised for wav2vec2-base specifically.
-    )
-    batch["input_values"] = extractor_outputs["input_values"]
-    return batch
+    
 
 def compute_metrics(eval_pred):
     logits = eval_pred.predictions
@@ -193,33 +183,44 @@ def print_per_feature_statistics(test_results):
     per_feature_acc_dict = {f"{feature_labels[i]}": float(per_feature_accuracy[i]) for i in range(len(feature_labels))}
     print(per_feature_acc_dict)
 
-def train_preprocessing(config, feature_extractor: Wav2Vec2FeatureExtractor):
-    dataset = load_timit_dataset()
-
-    # timit_subset = dataset["train"].select(range(200))
-    # dataset = DatasetDict({"train": timit_subset})
+def train_preprocessing(config, feature_extractor):
+    dataset_path = config.get("processed_dataset_path_cl", "./datasets/processed_timit_dataset-")
+    os.makedirs(Path(dataset_path).parent, exist_ok=True)
     
-    dataset = dataset.map(
-        prepare_dataset,
-        desc="Aligning articulatory features",
-        load_from_cache_file=False
-    )
+    if config["load_processed_dataset"] and Path(dataset_path).exists():
+        print(f"Loading processed TIMIT dataset from {dataset_path}...")
+        dataset = load_from_disk(dataset_path)
+    else:
+        print("Loading and processing TIMIT dataset...")
+        dataset = load_timit_dataset(config["sample_validation_set"], config.get("sample_validation_size", 0.10))
 
-    dataset = dataset.map(
-        compute_inputs,
-        batched=True,       # Defaults to standard batch size=1000 for dataset library
-        fn_kwargs={"feature_extractor": feature_extractor},
-        desc="Extracting wav2vec2 inputs",
-        load_from_cache_file=False
-    )
+        # timit_subset = dataset["train"].select(range(200))
+        # dataset = DatasetDict({"train": timit_subset})
+        
+        dataset = dataset.map(
+            prepare_dataset,
+            desc="Aligning articulatory features",
+            load_from_cache_file=False
+        )
+        
+        dataset = dataset.map(
+            compute_inputs,
+            batched=True,       # Defaults to standard batch size=1000 for dataset library
+            fn_kwargs={"feature_extractor": feature_extractor},
+            desc="Extracting wav2vec2 inputs",
+            load_from_cache_file=False
+        )
 
-    keep_columns = {"input_values", "labels"}
-    for split in dataset.keys():
-        remove_columns = [
-            column for column in dataset[split].column_names if column not in keep_columns
-        ]
-        if remove_columns:
-            dataset[split] = dataset[split].remove_columns(remove_columns)
+        keep_columns = {"input_values", "labels"}
+        for split in dataset.keys():
+            remove_columns = [
+                column for column in dataset[split].column_names if column not in keep_columns
+            ]
+            if remove_columns:
+                dataset[split] = dataset[split].remove_columns(remove_columns)
+            
+        print(f"Saving processed dataset to {dataset_path}...")
+        dataset.save_to_disk(dataset_path)
     
     num_labels = BINARY_FEATURE_DIM
     model_checkpoint = config["model_checkpoint"]
@@ -250,7 +251,7 @@ if __name__ == "__main__":
     
     config = load_training_config()
 
-    load_dotenv() 
+    load_dotenv()
     api_key = os.getenv("WANDB_API_KEY")
     wandb.login(key=api_key)
     
@@ -259,13 +260,11 @@ if __name__ == "__main__":
         name=config["run_name"],
         config=config,
     )
-
+    
     model_checkpoint = config["model_checkpoint"]
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_checkpoint)
-    num_labels = BINARY_FEATURE_DIM
     
     dataset, model = train_preprocessing(config, feature_extractor)
-    # print_dataset_statistics(dataset)
 
     training_args = TrainingArguments(
         output_dir=config["output_dir"],
@@ -283,6 +282,7 @@ if __name__ == "__main__":
         report_to="wandb"
     )
 
+    num_labels = BINARY_FEATURE_DIM
     data_collator = ArticulatoryFeatureDataCollator(label_dim=num_labels)
 
     eval_split = "validation" if "validation" in dataset else "test"

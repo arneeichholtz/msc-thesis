@@ -5,17 +5,32 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
+import os
+import wandb
+from dotenv import load_dotenv
 
 import torch
+import numpy as np
 import yaml
 from transformers import Trainer, TrainingArguments
 
-from data_prep import BINARY_FEATURE_DIM, load_timit_dataset, process_data_for_ctc
-# from data_prep_ctc import process_data_for_ctc
+from datasets import DatasetDict, load_from_disk, load_metric
+
+from data_prep import (
+    BINARY_FEATURE_DIM, 
+    load_timit_dataset, 
+    prepare_dataset, 
+    get_phoneme_vocab, 
+    format_for_ctc
+)
 from model import LinearCTCModel
-from vocab import get_phoneme_vocab
 
 CONFIG_PATH = Path("config.yml")
+
+CTC_BLANK_ID = 0
+PHONEME_VOCAB = get_phoneme_vocab()
+ID_TO_PHONEME = {idx: token for token, idx in PHONEME_VOCAB.items()}
+PER_METRIC = load_metric("wer")
 
 
 @dataclass
@@ -70,33 +85,133 @@ def load_training_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
         return yaml.safe_load(fp)
 
 
-def prepare_ctc_dataset() -> Dict[str, Any]:
-    dataset = load_timit_dataset()
-    dataset = dataset.map(
-        process_data_for_ctc,
-        desc="Preparing CTC inputs",
-        load_from_cache_file=False,
-    )
+def prepare_ctc_dataset(config: Dict[str, Any]) -> Dict[str, Any]:
+    dataset_path = config.get("processed_dataset_path_tl", "./datasets/processed_timit_dataset-tasklayer")
+    os.makedirs(Path(dataset_path).parent, exist_ok=True)
 
-    keep_columns = {"input_values", "labels"}
-    for split in dataset.keys():
-        remove_columns = [
-            column for column in dataset[split].column_names if column not in keep_columns
-        ]
-        if remove_columns:
-            dataset[split] = dataset[split].remove_columns(remove_columns)
+    if config["load_processed_dataset"] and Path(dataset_path).exists():
+        print(f"Loading processed TIMIT dataset from {dataset_path}...")
+        dataset = load_from_disk(dataset_path)
+    else:
+        print("Loading and processing TIMIT dataset...")
+        dataset = load_timit_dataset(config["sample_validation_set"], config.get("sample_validation_size", 0.10))
+        
+        # timit_subset = dataset["train"].select(range(200))
+        # dataset = DatasetDict({"train": timit_subset})
+    
+        dataset = dataset.map(
+            prepare_dataset,
+            desc="Aligning articulatory features",
+            load_from_cache_file=False,
+        )
+
+        dataset = dataset.map(
+            format_for_ctc,
+            desc="Formatting for CTC",
+            load_from_cache_file=False,
+        )
+
+        keep_columns = {"input_values", "labels"}
+        for split in dataset.keys():
+            remove_columns = [
+                column for column in dataset[split].column_names if column not in keep_columns
+            ]
+            if remove_columns:
+                dataset[split] = dataset[split].remove_columns(remove_columns)
+
+        print(f"Saving processed dataset to {dataset_path}...")
+        dataset.save_to_disk(dataset_path)
 
     return dataset
 
 
-def main() -> None:
+def _collapse_ctc_predictions(sequence: np.ndarray, blank_id: int = 0) -> List[int]:
+    """Remove blank tokens and repeated predictions for a single sequence."""
+    collapsed: List[int] = []
+    prev_token = None
+    for token in sequence.tolist():
+        if token == blank_id:
+            prev_token = None
+            continue
+        if token != prev_token:
+            collapsed.append(int(token))
+        prev_token = token
+    return collapsed
+
+
+def _ids_to_phonemes(sequence: List[int]) -> List[str]:
+    """Convert a sequence of phoneme IDs to their string tokens."""
+    tokens: List[str] = []
+    for idx in sequence:
+        if idx == CTC_BLANK_ID:
+            continue
+        token = ID_TO_PHONEME.get(int(idx))
+        if token is not None and token != "<pad>":
+            tokens.append(token)
+    return tokens
+
+
+def compute_metrics(eval_pred) -> Dict[str, float]:
+    """Calculate phoneme error rate (PER) for CTC predictions."""
+    logits = eval_pred.predictions
+    # if isinstance(logits, tuple):
+    #     logits = logits[0]
+
+    label_ids = eval_pred.label_ids
+
+    pred_ids = np.argmax(logits, axis=-1)
+    pred_sequences = [_collapse_ctc_predictions(seq, blank_id=CTC_BLANK_ID) for seq in pred_ids]
+
+    label_sequences: List[List[int]] = []
+    for label_seq in label_ids:
+        if isinstance(label_seq, torch.Tensor):
+            label_seq = label_seq.cpu().numpy()
+        filtered = [int(idx) for idx in label_seq.tolist() if idx != -100]
+        label_sequences.append(filtered)
+
+    references: List[str] = []
+    predictions: List[str] = []
+
+    for prediction, reference in zip(pred_sequences, label_sequences):
+        reference_tokens = _ids_to_phonemes(reference)
+        if not reference_tokens:
+            continue
+        references.append(" ".join(reference_tokens))
+        prediction_tokens = _ids_to_phonemes(prediction)
+        predictions.append(" ".join(prediction_tokens))
+
+    if not references:
+        phoneme_error_rate = 0.0
+    else:
+        phoneme_error_rate = PER_METRIC.compute(
+            predictions=predictions,
+            references=references,
+        )
+
+    return {"phoneme_error_rate": float(phoneme_error_rate)}
+
+
+if __name__ == "__main__":
     config = load_training_config()
 
-    dataset = prepare_ctc_dataset()
+    # load_dotenv()
+    # api_key = os.getenv("WANDB_API_KEY")
+    # wandb.login(key=api_key)
+    
+    # wandb_run = wandb.init(
+    #     project=config["wandb_project"],
+    #     name=config["run_name"],
+    #     config=config,
+    # )
+
+    dataset = prepare_ctc_dataset(config)
     eval_split = "validation" if "validation" in dataset else "test"
 
-    vocab = get_phoneme_vocab()
-    vocab_size = len(vocab)
+    print("eval split:", eval_split)
+
+    vocab_size = len(PHONEME_VOCAB)
+
+    print(f"Phoneme vocabulary size: {vocab_size}")
 
     model = LinearCTCModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)
 
@@ -113,7 +228,7 @@ def main() -> None:
         warmup_steps=config["warmup_steps"],
         save_total_limit=config["save_total_limit"],
         fp16=config["use_fp16"],
-        report_to="none",
+        report_to="wandb",
     )
 
     data_collator = CTCDataCollator(feature_dim=BINARY_FEATURE_DIM)
@@ -124,10 +239,14 @@ def main() -> None:
         train_dataset=dataset["train"],
         eval_dataset=dataset[eval_split],
         data_collator=data_collator,
+        compute_metrics=compute_metrics,
     )
 
     trainer.train()
 
+    test_results = trainer.predict(dataset["test"])
+    print(test_results.metrics)
 
-if __name__ == "__main__":
-    main()
+    # print_per_feature_statistics(test_results)
+
+    # wandb_run.finish()
