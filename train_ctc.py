@@ -96,8 +96,8 @@ def prepare_ctc_dataset(config: Dict[str, Any]) -> Dict[str, Any]:
         print("Loading and processing TIMIT dataset...")
         dataset = load_timit_dataset(config["sample_validation_set"], config.get("sample_validation_size", 0.10))
         
-        # timit_subset = dataset["train"].select(range(200))
-        # dataset = DatasetDict({"train": timit_subset})
+        timit_subset = dataset["train"].select(range(1000))
+        dataset = DatasetDict({"train": timit_subset})
     
         dataset = dataset.map(
             prepare_dataset,

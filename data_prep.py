@@ -153,13 +153,18 @@ def prepare_dataset(batch: Dict) -> Dict:
     if num_frames == 0:
         raise ValueError(f"Audio too short for wav2vec2 frame alignment: {len(waveform)} samples.")
     
-    frame_labels = np.zeros((num_frames, BINARY_FEATURE_DIM), dtype=np.int8)
+    # frame_labels = np.zeros((num_frames, BINARY_FEATURE_DIM), dtype=np.int8)
+    frame_labels = np.full((num_frames, BINARY_FEATURE_DIM), -100, dtype=np.int32)
+
 
     starts = batch["phonetic_detail"]["start"]
     stops = batch["phonetic_detail"]["stop"]
     phonemes = batch["phonetic_detail"]["utterance"]
 
     for start, stop, phoneme in zip(starts, stops, phonemes):
+        if phoneme.lower() == "q":        # Skip the glottal stop 'q'
+            continue
+        
         canonical = canonicalize_phoneme(phoneme)
         feature_vector = PHONEME_BINARY_FEATURES.get(canonical, SILENCE_VECTOR)     # Use the silence vector for unmapped phonemes, though phonemes in TIMIT and defined phoneme mapping should be the same
 
@@ -172,10 +177,12 @@ def prepare_dataset(batch: Dict) -> Dict:
 
         frame_labels[frame_start:frame_stop] = feature_vector            # Overwrite first index of frame_labels
     
-    if num_frames > 0:
-        unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]          # Will be non-empty if first time step (starts) is not 0
-        if len(unassigned) > 0:
-            frame_labels[unassigned] = SILENCE_VECTOR
+    # REMOVED the block below. If the first time step in starts is not 0, for the glottal stop q and if stop - start < stride, unassigned will be non-empty. 
+    # However, now the labels are initialized to -100, meaning that these unassigned frames will be ignored later.
+    # if num_frames > 0:
+    #     unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]          # Will be non-empty if first time step (starts) is not 0
+    #     if len(unassigned) > 0:
+    #         frame_labels[unassigned] = SILENCE_VECTOR
 
     batch["num_frames"] = num_frames
     batch["labels"] = frame_labels.tolist()
@@ -213,12 +220,12 @@ def load_timit_dataset(sample_validation_set: bool = True, sample_validation_siz
 def phoneme_sequence_to_ids(phonemes: List[str]) -> List[int]:
     ids: List[int] = []
     for phoneme in phonemes:
+        if phoneme.lower() == "q":        # Skip the glottal stop 'q'
+            continue
         canonical = canonicalize_phoneme(phoneme)
         try:
             ids.append(PHONEME_VOCAB[canonical])
         except KeyError as exc:
-            if canonical == "q":
-                continue
             raise KeyError(f"Phoneme '{canonical}' not found in vocabulary") from exc
     return ids
 
