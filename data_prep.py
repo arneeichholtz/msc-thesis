@@ -217,6 +217,8 @@ def phoneme_sequence_to_ids(phonemes: List[str]) -> List[int]:
         try:
             ids.append(PHONEME_VOCAB[canonical])
         except KeyError as exc:
+            if canonical == "q":
+                continue
             raise KeyError(f"Phoneme '{canonical}' not found in vocabulary") from exc
     return ids
 

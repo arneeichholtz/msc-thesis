@@ -14,7 +14,8 @@ import numpy as np
 import yaml
 from transformers import Trainer, TrainingArguments
 
-from datasets import DatasetDict, load_from_disk, load_metric
+from datasets import DatasetDict, load_from_disk
+from jiwer import wer
 
 from data_prep import (
     BINARY_FEATURE_DIM, 
@@ -30,7 +31,6 @@ CONFIG_PATH = Path("config.yml")
 CTC_BLANK_ID = 0
 PHONEME_VOCAB = get_phoneme_vocab()
 ID_TO_PHONEME = {idx: token for token, idx in PHONEME_VOCAB.items()}
-PER_METRIC = load_metric("wer")
 
 
 @dataclass
@@ -183,10 +183,7 @@ def compute_metrics(eval_pred) -> Dict[str, float]:
     if not references:
         phoneme_error_rate = 0.0
     else:
-        phoneme_error_rate = PER_METRIC.compute(
-            predictions=predictions,
-            references=references,
-        )
+        phoneme_error_rate = wer(references, predictions)
 
     return {"phoneme_error_rate": float(phoneme_error_rate)}
 
