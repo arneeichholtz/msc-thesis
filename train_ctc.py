@@ -96,8 +96,8 @@ def prepare_ctc_dataset(config: Dict[str, Any]) -> Dict[str, Any]:
         print("Loading and processing TIMIT dataset...")
         dataset = load_timit_dataset(config["sample_validation_set"], config.get("sample_validation_size", 0.10))
         
-        timit_subset = dataset["train"].select(range(1000))
-        dataset = DatasetDict({"train": timit_subset})
+        # timit_subset = dataset["train"].select(range(1000))
+        # dataset = DatasetDict({"train": timit_subset})
     
         dataset = dataset.map(
             prepare_dataset,
@@ -191,23 +191,21 @@ def compute_metrics(eval_pred) -> Dict[str, float]:
 if __name__ == "__main__":
     config = load_training_config()
 
-    # load_dotenv()
-    # api_key = os.getenv("WANDB_API_KEY")
-    # wandb.login(key=api_key)
+    load_dotenv()
+    api_key = os.getenv("WANDB_API_KEY")
+    wandb.login(key=api_key)
     
-    # wandb_run = wandb.init(
-    #     project=config["wandb_project"],
-    #     name=config["run_name"],
-    #     config=config,
-    # )
+    wandb_run = wandb.init(
+        project=config["wandb_project"],
+        name=config["run_name"],
+        config=config,
+    )
 
     dataset = prepare_ctc_dataset(config)
     eval_split = "validation" if "validation" in dataset else "test"
-
     print("eval split:", eval_split)
 
     vocab_size = len(PHONEME_VOCAB)
-
     print(f"Phoneme vocabulary size: {vocab_size}")
 
     model = LinearCTCModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)
@@ -246,4 +244,4 @@ if __name__ == "__main__":
 
     # print_per_feature_statistics(test_results)
 
-    # wandb_run.finish()
+    wandb_run.finish()

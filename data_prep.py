@@ -153,13 +153,14 @@ def prepare_dataset(batch: Dict) -> Dict:
     if num_frames == 0:
         raise ValueError(f"Audio too short for wav2vec2 frame alignment: {len(waveform)} samples.")
     
-    # frame_labels = np.zeros((num_frames, BINARY_FEATURE_DIM), dtype=np.int8)
-    frame_labels = np.full((num_frames, BINARY_FEATURE_DIM), -100, dtype=np.int32)
-
+    frame_labels = np.zeros((num_frames, BINARY_FEATURE_DIM), dtype=np.int8)
+    # frame_labels = np.full((num_frames, BINARY_FEATURE_DIM), -100, dtype=np.int32)
 
     starts = batch["phonetic_detail"]["start"]
     stops = batch["phonetic_detail"]["stop"]
     phonemes = batch["phonetic_detail"]["utterance"]
+
+    # valid_frames = []
 
     for start, stop, phoneme in zip(starts, stops, phonemes):
         if phoneme.lower() == "q":        # Skip the glottal stop 'q'
@@ -175,17 +176,32 @@ def prepare_dataset(batch: Dict) -> Dict:
         if frame_start >= frame_stop:       # Skip phonemes with stop-start < stride; ~1% of phonemes
             continue
 
+        # # Append the actual feature vectors for the duration of this phoneme
+        # duration = frame_stop - frame_start
+        # for _ in range(duration):
+        #     valid_frames.append(feature_vector)
+
         frame_labels[frame_start:frame_stop] = feature_vector            # Overwrite first index of frame_labels
     
     # REMOVED the block below. If the first time step in starts is not 0, for the glottal stop q and if stop - start < stride, unassigned will be non-empty. 
     # However, now the labels are initialized to -100, meaning that these unassigned frames will be ignored later.
-    # if num_frames > 0:
-    #     unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]          # Will be non-empty if first time step (starts) is not 0
-    #     if len(unassigned) > 0:
-    #         frame_labels[unassigned] = SILENCE_VECTOR
+    if num_frames > 0:
+        unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]          # Will be non-empty if first time step (starts) is not 0
+        if len(unassigned) > 0:
+            frame_labels[unassigned] = SILENCE_VECTOR
+
+    
+    
+    # Reconstruct labels from valid segments only
+    if not valid_frames:
+        # Fallback for empty/invalid utterances
+        print("valid frames is empty")
+        batch["labels"] = np.zeros((1, BINARY_FEATURE_DIM)).tolist()
+    else:
+        batch["labels"] = np.array(valid_frames).tolist()
 
     batch["num_frames"] = num_frames
-    batch["labels"] = frame_labels.tolist()
+    # batch["labels"] = frame_labels.tolist()
     batch["binary_feature_dim"] = BINARY_FEATURE_DIM
 
     return batch
