@@ -15,8 +15,6 @@ import numpy as np
 from datasets import Audio, DatasetDict, IterableDatasetDict, load_dataset
 from transformers import Wav2Vec2FeatureExtractor
 
-# from vocab import get_phoneme_vocab
-
 from features_config.features import (
     central_labels,
     fb_labels,
@@ -101,16 +99,13 @@ def phoneme_processing():
     return full_phoneme_feature_dict, phoneme_feature_dict
 
 
-def get_phoneme_vocab():
+def phoneme_token_to_id():
     """Return a phoneme vocabulary mapping token -> id.
 
     ID 0 is reserved for "<pad>" (CTC blank).
     Remaining IDs are assigned to unique phoneme tokens sorted alphabetically.
     """
     unique_tokens = sorted(set(phoneme_mapping.values()))
-    if "q" in unique_tokens:            # Remove the glottal stop 'q'
-        unique_tokens.remove("q")
-    
     token_to_id = {"<pad>": 0}
     token_to_id.update({token: idx + 1 for idx, token in enumerate(unique_tokens)})
     return token_to_id
@@ -127,15 +122,15 @@ SILENCE_VECTOR: np.ndarray = PHONEME_BINARY_FEATURES.get(
     "sil", np.zeros(BINARY_FEATURE_DIM, dtype=np.int8)
 )
 
-PHONEME_VOCAB = get_phoneme_vocab()
+PHONEME_TOKEN_TO_ID = phoneme_token_to_id()
 
-def canonicalize_phoneme(raw_phoneme: str) -> str:
-    """Map raw TIMIT phoneme labels to the 39+1 canonical inventory. Raise ValueError if no mapping exists."""
+def collapse_phoneme(raw_phoneme: str) -> str:
+    """Map raw TIMIT phoneme labels to the standard 39 collapsed inventory. Raise ValueError if no mapping exists."""
     key = raw_phoneme.lower()
     mapped_phoneme = phoneme_mapping.get(key, None)
     if not mapped_phoneme:
         raise ValueError(f"Phoneme '{raw_phoneme}' not found in mapping. Check phoneme_mapping for missing entries.")
-    else: 
+    else:
         return mapped_phoneme
 
 
@@ -154,54 +149,31 @@ def prepare_dataset(batch: Dict) -> Dict:
         raise ValueError(f"Audio too short for wav2vec2 frame alignment: {len(waveform)} samples.")
     
     frame_labels = np.zeros((num_frames, BINARY_FEATURE_DIM), dtype=np.int8)
-    # frame_labels = np.full((num_frames, BINARY_FEATURE_DIM), -100, dtype=np.int32)
 
     starts = batch["phonetic_detail"]["start"]
     stops = batch["phonetic_detail"]["stop"]
     phonemes = batch["phonetic_detail"]["utterance"]
 
-    # valid_frames = []
-
     for start, stop, phoneme in zip(starts, stops, phonemes):
-        if phoneme.lower() == "q":        # Skip the glottal stop 'q'
-            continue
         
-        canonical = canonicalize_phoneme(phoneme)
-        feature_vector = PHONEME_BINARY_FEATURES.get(canonical, SILENCE_VECTOR)     # Use the silence vector for unmapped phonemes, though phonemes in TIMIT and defined phoneme mapping should be the same
+        collapsed_phon = collapse_phoneme(phoneme)
+        feature_vector = PHONEME_BINARY_FEATURES.get(collapsed_phon, SILENCE_VECTOR)     # Use the silence vector for unmapped phonemes, though phonemes in TIMIT and defined phoneme mapping should be the same
 
         frame_start = math.floor(start / WAV2VEC2_FRAME_STRIDE)          # Floor division so first phoneme will start at 0
         frame_stop = math.ceil(stop / WAV2VEC2_FRAME_STRIDE)             # Ceil rounding so 6.2 frames is 7 frames
         frame_stop = min(frame_stop, num_frames)                         # Ensure remaining values after num_frames are discarded; often this is sil
 
-        if frame_start >= frame_stop:       # Skip phonemes with stop-start < stride; ~1% of phonemes
+        if frame_start >= frame_stop:       # Skip phonemes with stop-start < stride, which are ~1% of phonemes; these will be assigned the SIL vector
             continue
-
-        # # Append the actual feature vectors for the duration of this phoneme
-        # duration = frame_stop - frame_start
-        # for _ in range(duration):
-        #     valid_frames.append(feature_vector)
 
         frame_labels[frame_start:frame_stop] = feature_vector            # Overwrite first index of frame_labels
     
-    # REMOVED the block below. If the first time step in starts is not 0, for the glottal stop q and if stop - start < stride, unassigned will be non-empty. 
-    # However, now the labels are initialized to -100, meaning that these unassigned frames will be ignored later.
-    if num_frames > 0:
-        unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]          # Will be non-empty if first time step (starts) is not 0
-        if len(unassigned) > 0:
-            frame_labels[unassigned] = SILENCE_VECTOR
-
-    
-    
-    # Reconstruct labels from valid segments only
-    if not valid_frames:
-        # Fallback for empty/invalid utterances
-        print("valid frames is empty")
-        batch["labels"] = np.zeros((1, BINARY_FEATURE_DIM)).tolist()
-    else:
-        batch["labels"] = np.array(valid_frames).tolist()
+    unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]          # Will be non-empty if first time step (starts) is not 0
+    if len(unassigned) > 0:
+        frame_labels[unassigned] = SILENCE_VECTOR
 
     batch["num_frames"] = num_frames
-    # batch["labels"] = frame_labels.tolist()
+    batch["labels"] = frame_labels.tolist()
     batch["binary_feature_dim"] = BINARY_FEATURE_DIM
 
     return batch
@@ -236,19 +208,17 @@ def load_timit_dataset(sample_validation_set: bool = True, sample_validation_siz
 def phoneme_sequence_to_ids(phonemes: List[str]) -> List[int]:
     ids: List[int] = []
     for phoneme in phonemes:
-        if phoneme.lower() == "q":        # Skip the glottal stop 'q'
-            continue
-        canonical = canonicalize_phoneme(phoneme)
+        collapsed_phon = collapse_phoneme(phoneme)       # This is the collapsed phoneme
         try:
-            ids.append(PHONEME_VOCAB[canonical])
+            ids.append(PHONEME_TOKEN_TO_ID[collapsed_phon])     # ID of the collapsed phoneme
         except KeyError as exc:
-            raise KeyError(f"Phoneme '{canonical}' not found in vocabulary") from exc
+            raise KeyError(f"Phoneme '{collapsed_phon}' not found in vocabulary") from exc
     return ids
 
 
 def format_for_ctc(batch):
     return {
-        "input_values": batch["labels"],                # The frame labels are the inputs for CTC
+        "input_values": batch["labels"],                # The frame labels from the concept layer (29-dim binary vector) are the inputs for CTC
         "labels": phoneme_sequence_to_ids(batch["phonetic_detail"]["utterance"])
     }
 

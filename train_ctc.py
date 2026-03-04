@@ -21,7 +21,7 @@ from data_prep import (
     BINARY_FEATURE_DIM, 
     load_timit_dataset, 
     prepare_dataset, 
-    get_phoneme_vocab, 
+    phoneme_token_to_id, 
     format_for_ctc
 )
 from model import LinearCTCModel
@@ -29,8 +29,8 @@ from model import LinearCTCModel
 CONFIG_PATH = Path("config.yml")
 
 CTC_BLANK_ID = 0
-PHONEME_VOCAB = get_phoneme_vocab()
-ID_TO_PHONEME = {idx: token for token, idx in PHONEME_VOCAB.items()}
+PHONEME_TOKEN_TO_ID = phoneme_token_to_id()
+ID_TO_PHONEME = {idx: token for token, idx in PHONEME_TOKEN_TO_ID.items()}
 
 
 @dataclass
@@ -96,7 +96,7 @@ def prepare_ctc_dataset(config: Dict[str, Any]) -> Dict[str, Any]:
         print("Loading and processing TIMIT dataset...")
         dataset = load_timit_dataset(config["sample_validation_set"], config.get("sample_validation_size", 0.10))
         
-        # timit_subset = dataset["train"].select(range(1000))
+        # timit_subset = dataset["train"].select(range(10))
         # dataset = DatasetDict({"train": timit_subset})
     
         dataset = dataset.map(
@@ -189,6 +189,7 @@ def compute_metrics(eval_pred) -> Dict[str, float]:
 
 
 if __name__ == "__main__":
+    
     config = load_training_config()
 
     load_dotenv()
@@ -205,7 +206,7 @@ if __name__ == "__main__":
     eval_split = "validation" if "validation" in dataset else "test"
     print("eval split:", eval_split)
 
-    vocab_size = len(PHONEME_VOCAB)
+    vocab_size = len(PHONEME_TOKEN_TO_ID)
     print(f"Phoneme vocabulary size: {vocab_size}")
 
     model = LinearCTCModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)

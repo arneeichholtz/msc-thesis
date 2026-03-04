@@ -89,7 +89,7 @@ phoneme_mapping = {
     's': 's',
     'z': 'z',
     'r': 'r',
-    'q': 'q',
+    'q': 'sil',     # Modified this to sil, was 'q': 'q' before
     'w': 'w',
     'y': 'y',
     'jh': 'jh',

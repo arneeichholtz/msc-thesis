@@ -1,6 +1,6 @@
 processed_dataset_path_cl: ./datasets/processed_timit_dataset-conceptlayer
 processed_dataset_path_tl: ./datasets/processed_timit_dataset-tasklayer
-load_processed_dataset: True    # If True, load processed TIMIT dataset with frames and binary labels from disk
+load_processed_dataset: False    # If True, load processed TIMIT dataset with frames and binary labels from disk
 
 model_checkpoint: facebook/wav2vec2-base    # Will be used for model and processor
 output_dir: /projects/0/prjs1921/thesis-speech/model_checkpoints
