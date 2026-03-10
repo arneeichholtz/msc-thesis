@@ -1,6 +1,6 @@
 processed_dataset_path_cl: ./datasets/processed_timit_dataset-conceptlayer
 processed_dataset_path_tl: ./datasets/processed_timit_dataset-tasklayer
-load_processed_dataset: False    # If True, load processed TIMIT dataset with frames and binary labels from disk
+load_processed_dataset: True    # If True, load processed TIMIT dataset with frames and binary labels from disk
 
 model_checkpoint: facebook/wav2vec2-base    # Will be used for model and processor
 output_dir: /projects/0/prjs1921/thesis-speech/model_checkpoints
@@ -9,7 +9,7 @@ learning_rate: 0.001
 per_device_train_batch_size: 32
 per_device_eval_batch_size: 32
 num_train_epochs: 20
-logging_steps: 50
+logging_steps: 20
 save_steps: 500
 eval_steps: 500
 warmup_steps: 1000
@@ -24,4 +24,4 @@ use_callback_unfreeze: False    # If True, use UnfreezingCallback to unfreeze th
 thaw_step: 1000                 # Number of steps after which to unfreeze the wav2vec2 encoder (Transformer layers)
 
 wandb_project: thesis-cbm       # WandB project name for logging training runs
-run_name: wav2vec2-cbm-tl-test
+run_name: wav2vec2-cbm-tl

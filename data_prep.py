@@ -102,11 +102,11 @@ def phoneme_processing():
 def phoneme_token_to_id():
     """Return a phoneme vocabulary mapping token -> id.
 
-    ID 0 is reserved for "<pad>" (CTC blank).
+    ID 0 is reserved for "<blank>" (CTC blank).
     Remaining IDs are assigned to unique phoneme tokens sorted alphabetically.
     """
     unique_tokens = sorted(set(phoneme_mapping.values()))
-    token_to_id = {"<pad>": 0}
+    token_to_id = {"<blank>": 0}
     token_to_id.update({token: idx + 1 for idx, token in enumerate(unique_tokens)})
     return token_to_id
 
@@ -124,8 +124,8 @@ SILENCE_VECTOR: np.ndarray = PHONEME_BINARY_FEATURES.get(
 
 PHONEME_TOKEN_TO_ID = phoneme_token_to_id()
 
-def collapse_phoneme(raw_phoneme: str) -> str:
-    """Map raw TIMIT phoneme labels to the standard 39 collapsed inventory. Raise ValueError if no mapping exists."""
+def reduce_phoneme(raw_phoneme: str) -> str:
+    """Map raw TIMIT phoneme labels to the standard 39 reduced inventory. Raise ValueError if no mapping exists."""
     key = raw_phoneme.lower()
     mapped_phoneme = phoneme_mapping.get(key, None)
     if not mapped_phoneme:
@@ -156,8 +156,8 @@ def prepare_dataset(batch: Dict) -> Dict:
 
     for start, stop, phoneme in zip(starts, stops, phonemes):
         
-        collapsed_phon = collapse_phoneme(phoneme)
-        feature_vector = PHONEME_BINARY_FEATURES.get(collapsed_phon, SILENCE_VECTOR)     # Use the silence vector for unmapped phonemes, though phonemes in TIMIT and defined phoneme mapping should be the same
+        reduced_phon = reduce_phoneme(phoneme)
+        feature_vector = PHONEME_BINARY_FEATURES.get(reduced_phon, SILENCE_VECTOR)     # Use the silence vector for unmapped phonemes, though phonemes in TIMIT and defined phoneme mapping should be the same
 
         frame_start = math.floor(start / WAV2VEC2_FRAME_STRIDE)          # Floor division so first phoneme will start at 0
         frame_stop = math.ceil(stop / WAV2VEC2_FRAME_STRIDE)             # Ceil rounding so 6.2 frames is 7 frames
@@ -168,7 +168,7 @@ def prepare_dataset(batch: Dict) -> Dict:
 
         frame_labels[frame_start:frame_stop] = feature_vector            # Overwrite first index of frame_labels
     
-    unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]          # Will be non-empty if first time step (starts) is not 0
+    unassigned = np.where(frame_labels.sum(axis=1) == 0)[0]          # Will be non-empty if first time step (starts) is not 0 or for the short phonemes (less than a frame) that are skipped
     if len(unassigned) > 0:
         frame_labels[unassigned] = SILENCE_VECTOR
 
@@ -208,11 +208,11 @@ def load_timit_dataset(sample_validation_set: bool = True, sample_validation_siz
 def phoneme_sequence_to_ids(phonemes: List[str]) -> List[int]:
     ids: List[int] = []
     for phoneme in phonemes:
-        collapsed_phon = collapse_phoneme(phoneme)       # This is the collapsed phoneme
+        reduced_phon = reduce_phoneme(phoneme)       # This is the reduced phoneme
         try:
-            ids.append(PHONEME_TOKEN_TO_ID[collapsed_phon])     # ID of the collapsed phoneme
+            ids.append(PHONEME_TOKEN_TO_ID[reduced_phon])     # ID of the reduced phoneme -- PHONEME_TOKEN_TO_ID already contains <blank> at index 0.
         except KeyError as exc:
-            raise KeyError(f"Phoneme '{collapsed_phon}' not found in vocabulary") from exc
+            raise KeyError(f"Phoneme '{reduced_phon}' not found in vocabulary") from exc
     return ids
 
 

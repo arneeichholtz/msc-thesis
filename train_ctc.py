@@ -51,13 +51,13 @@ class CTCDataCollator:
             (batch_size, max_frames, self.feature_dim),
             self.input_padding_value,
             dtype=torch.float32,
-        )
-        attention_mask = torch.zeros((batch_size, max_frames), dtype=torch.long)
+        )       # Shape: (batch_size, max_frames, 29)
+        attention_mask = torch.zeros((batch_size, max_frames), dtype=torch.long)        # Attn mask starts out as all zeros
 
         for idx, feature in enumerate(features):
             values = torch.tensor(feature["input_values"], dtype=torch.float32)
             seq_len = values.size(0)
-            input_values[idx, :seq_len] = values
+            input_values[idx, :seq_len] = values        # Assign values like this since torch.stack already requires same size
             attention_mask[idx, :seq_len] = 1
 
         label_lengths = [len(f["labels"]) for f in features]
@@ -151,39 +151,39 @@ def _ids_to_phonemes(sequence: List[int]) -> List[str]:
     return tokens
 
 
-def compute_metrics(eval_pred) -> Dict[str, float]:
+def compute_metrics(pred) -> Dict[str, float]:
     """Calculate phoneme error rate (PER) for CTC predictions."""
-    logits = eval_pred.predictions
-    # if isinstance(logits, tuple):
-    #     logits = logits[0]
+    logits = pred.predictions       # logits shape: (eval_size, max_input_len, 40) = (462, 389, 40)
+    label_ids = pred.label_ids      # label_ids shape: (eval_size, max_label_len) = (462, 73)
 
-    label_ids = eval_pred.label_ids
+    pred_ids = np.argmax(logits, axis=-1)       # pred_ids shape: (eval_size, max_input_len) = (462, 389)
+    print(f"Percentage of blanks predicted: {(pred_ids == 0).mean():.2%}")
+    pred_sequences = [_collapse_ctc_predictions(seq, blank_id=CTC_BLANK_ID) for seq in pred_ids]        # Remove blank and repeated tokens
 
-    pred_ids = np.argmax(logits, axis=-1)
-    pred_sequences = [_collapse_ctc_predictions(seq, blank_id=CTC_BLANK_ID) for seq in pred_ids]
-
-    label_sequences: List[List[int]] = []
+    label_sequences: List[List[int]] = []       # Save only non-padding labels
     for label_seq in label_ids:
         if isinstance(label_seq, torch.Tensor):
             label_seq = label_seq.cpu().numpy()
         filtered = [int(idx) for idx in label_seq.tolist() if idx != -100]
         label_sequences.append(filtered)
 
+    np.random.seed(101)
+    ids = np.random.randint(0, len(pred_sequences), size=5)
+    for idx in ids:
+        print(f"Sample {idx}:")
+        print(f"prediction: {_ids_to_phonemes(pred_sequences[idx])}")
+        print(f"labels: {_ids_to_phonemes(label_sequences[idx])} \n")
+
     references: List[str] = []
     predictions: List[str] = []
 
     for prediction, reference in zip(pred_sequences, label_sequences):
         reference_tokens = _ids_to_phonemes(reference)
-        if not reference_tokens:
-            continue
-        references.append(" ".join(reference_tokens))
+        references.append(" ".join(reference_tokens))       # Separate by space, this is what WER calculation expects
         prediction_tokens = _ids_to_phonemes(prediction)
         predictions.append(" ".join(prediction_tokens))
 
-    if not references:
-        phoneme_error_rate = 0.0
-    else:
-        phoneme_error_rate = wer(references, predictions)
+    phoneme_error_rate = wer(references, predictions)
 
     return {"phoneme_error_rate": float(phoneme_error_rate)}
 
@@ -192,57 +192,70 @@ if __name__ == "__main__":
     
     config = load_training_config()
 
-    load_dotenv()
-    api_key = os.getenv("WANDB_API_KEY")
-    wandb.login(key=api_key)
+    # load_dotenv()
+    # api_key = os.getenv("WANDB_API_KEY")
+    # wandb.login(key=api_key)
     
-    wandb_run = wandb.init(
-        project=config["wandb_project"],
-        name=config["run_name"],
-        config=config,
-    )
+    # wandb_run = wandb.init(
+    #     project=config["wandb_project"],
+    #     name=config["run_name"],
+    #     config=config,
+    # )
 
     dataset = prepare_ctc_dataset(config)
+
+    subset = dataset["train"].select(range(10))
+    test_input = subset[0]['input_values']
+    print("Input values: ", test_input)
+    print(len(test_input))
+    
+    test_labels = subset[0]['labels']
+    print(f"Labels: ", test_labels)
+    print(len(test_labels))
+
+    print(_ids_to_phonemes(test_labels))
+    
+
     eval_split = "validation" if "validation" in dataset else "test"
     print("eval split:", eval_split)
 
     vocab_size = len(PHONEME_TOKEN_TO_ID)
     print(f"Phoneme vocabulary size: {vocab_size}")
 
-    model = LinearCTCModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)
+    # model = LinearCTCModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)
 
-    training_args = TrainingArguments(
-        output_dir=config["output_dir"],
-        eval_strategy=config["eval_strategy"],
-        learning_rate=config["learning_rate"],
-        per_device_train_batch_size=config["per_device_train_batch_size"],
-        per_device_eval_batch_size=config["per_device_eval_batch_size"],
-        num_train_epochs=config["num_train_epochs"],
-        logging_steps=config["logging_steps"],
-        save_steps=config["save_steps"],
-        eval_steps=config["eval_steps"],
-        warmup_steps=config["warmup_steps"],
-        save_total_limit=config["save_total_limit"],
-        fp16=config["use_fp16"],
-        report_to="wandb",
-    )
+    # training_args = TrainingArguments(
+    #     output_dir=config["output_dir"],
+    #     eval_strategy=config["eval_strategy"],
+    #     learning_rate=config["learning_rate"],
+    #     per_device_train_batch_size=config["per_device_train_batch_size"],
+    #     per_device_eval_batch_size=config["per_device_eval_batch_size"],
+    #     num_train_epochs=config["num_train_epochs"],
+    #     logging_steps=config["logging_steps"],
+    #     save_steps=config["save_steps"],
+    #     eval_steps=config["eval_steps"],
+    #     warmup_steps=config["warmup_steps"],
+    #     save_total_limit=config["save_total_limit"],
+    #     fp16=config["use_fp16"],
+    #     report_to="wandb",
+    # )
 
-    data_collator = CTCDataCollator(feature_dim=BINARY_FEATURE_DIM)
+    # data_collator = CTCDataCollator(feature_dim=BINARY_FEATURE_DIM)
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=dataset["train"],
-        eval_dataset=dataset[eval_split],
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-    )
+    # trainer = Trainer(
+    #     model=model,
+    #     args=training_args,
+    #     train_dataset=dataset["train"],
+    #     eval_dataset=dataset[eval_split],
+    #     data_collator=data_collator,
+    #     compute_metrics=compute_metrics,
+    # )
 
-    trainer.train()
+    # trainer.train()
 
-    test_results = trainer.predict(dataset["test"])
-    print(test_results.metrics)
+    # test_results = trainer.predict(dataset["test"])
+    # print(test_results.metrics)
 
-    # print_per_feature_statistics(test_results)
+    # # print_per_feature_statistics(test_results)
 
-    wandb_run.finish()
+    # wandb_run.finish()
