@@ -80,7 +80,7 @@ def phoneme_processing():
     # Construct the final phoneme_dict, this contains all the 59 phonemes in the MV system, with their corresponding feature values as a list of indices
     full_phoneme_feature_dict = {
         phoneme: [
-            phonation_map[feature_values[0]],
+            phonation_map[feature_values[0]],       # Phonation map is {'v': 0, 'uv': 1, 's_p': 2}
             manner_map[feature_values[1]],
             place_map[feature_values[2]],
             fb_map[feature_values[3]],
@@ -90,10 +90,9 @@ def phoneme_processing():
         for phoneme, feature_values in mv_data.items()
     }
 
-    # Maps all phoneme labels to the 39+1 labels that will be used 
+    # Save the features for the 39 reduced phonemes 
     phoneme_feature_dict = {
-        phoneme_mapping[phoneme]: 
-            features for phoneme, features in full_phoneme_feature_dict.items()
+        phoneme: full_phoneme_feature_dict[phoneme] for phoneme in set(phoneme_mapping.values())
     }
 
     return full_phoneme_feature_dict, phoneme_feature_dict
@@ -157,8 +156,8 @@ def prepare_dataset(batch: Dict) -> Dict:
     for start, stop, phoneme in zip(starts, stops, phonemes):
         
         reduced_phon = reduce_phoneme(phoneme)
-        feature_vector = PHONEME_BINARY_FEATURES.get(reduced_phon, SILENCE_VECTOR)     # Use the silence vector for unmapped phonemes, though phonemes in TIMIT and defined phoneme mapping should be the same
-
+        feature_vector = PHONEME_BINARY_FEATURES.get(reduced_phon, SILENCE_VECTOR)     # Use the silence vector for unmapped phonemes, though phonemes in TIMIT and defined phoneme mapping should be the sam
+        
         frame_start = math.floor(start / WAV2VEC2_FRAME_STRIDE)          # Floor division so first phoneme will start at 0
         frame_stop = math.ceil(stop / WAV2VEC2_FRAME_STRIDE)             # Ceil rounding so 6.2 frames is 7 frames
         frame_stop = min(frame_stop, num_frames)                         # Ensure remaining values after num_frames are discarded; often this is sil

@@ -96,7 +96,7 @@ def prepare_ctc_dataset(config: Dict[str, Any]) -> Dict[str, Any]:
         print("Loading and processing TIMIT dataset...")
         dataset = load_timit_dataset(config["sample_validation_set"], config.get("sample_validation_size", 0.10))
         
-        # timit_subset = dataset["train"].select(range(10))
+        # timit_subset = dataset["train"].select(range(1))
         # dataset = DatasetDict({"train": timit_subset})
     
         dataset = dataset.map(
@@ -203,19 +203,6 @@ if __name__ == "__main__":
     # )
 
     dataset = prepare_ctc_dataset(config)
-
-    subset = dataset["train"].select(range(10))
-    test_input = subset[0]['input_values']
-    print("Input values: ", test_input)
-    print(len(test_input))
-    
-    test_labels = subset[0]['labels']
-    print(f"Labels: ", test_labels)
-    print(len(test_labels))
-
-    print(_ids_to_phonemes(test_labels))
-    
-
     eval_split = "validation" if "validation" in dataset else "test"
     print("eval split:", eval_split)
 
