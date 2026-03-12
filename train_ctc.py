@@ -192,15 +192,15 @@ if __name__ == "__main__":
     
     config = load_training_config()
 
-    # load_dotenv()
-    # api_key = os.getenv("WANDB_API_KEY")
-    # wandb.login(key=api_key)
+    load_dotenv()
+    api_key = os.getenv("WANDB_API_KEY")
+    wandb.login(key=api_key)
     
-    # wandb_run = wandb.init(
-    #     project=config["wandb_project"],
-    #     name=config["run_name"],
-    #     config=config,
-    # )
+    wandb_run = wandb.init(
+        project=config["wandb_project"],
+        name=config["run_name"],
+        config=config,
+    )
 
     dataset = prepare_ctc_dataset(config)
     eval_split = "validation" if "validation" in dataset else "test"
@@ -209,40 +209,40 @@ if __name__ == "__main__":
     vocab_size = len(PHONEME_TOKEN_TO_ID)
     print(f"Phoneme vocabulary size: {vocab_size}")
 
-    # model = LinearCTCModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)
+    model = LinearCTCModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)
 
-    # training_args = TrainingArguments(
-    #     output_dir=config["output_dir"],
-    #     eval_strategy=config["eval_strategy"],
-    #     learning_rate=config["learning_rate"],
-    #     per_device_train_batch_size=config["per_device_train_batch_size"],
-    #     per_device_eval_batch_size=config["per_device_eval_batch_size"],
-    #     num_train_epochs=config["num_train_epochs"],
-    #     logging_steps=config["logging_steps"],
-    #     save_steps=config["save_steps"],
-    #     eval_steps=config["eval_steps"],
-    #     warmup_steps=config["warmup_steps"],
-    #     save_total_limit=config["save_total_limit"],
-    #     fp16=config["use_fp16"],
-    #     report_to="wandb",
-    # )
+    training_args = TrainingArguments(
+        output_dir=config["output_dir"],
+        eval_strategy=config["eval_strategy"],
+        learning_rate=config["learning_rate"],
+        per_device_train_batch_size=config["per_device_train_batch_size"],
+        per_device_eval_batch_size=config["per_device_eval_batch_size"],
+        num_train_epochs=config["num_train_epochs"],
+        logging_steps=config["logging_steps"],
+        save_steps=config["save_steps"],
+        eval_steps=config["eval_steps"],
+        warmup_steps=config["warmup_steps"],
+        save_total_limit=config["save_total_limit"],
+        fp16=config["use_fp16"],
+        report_to="wandb",
+    )
 
-    # data_collator = CTCDataCollator(feature_dim=BINARY_FEATURE_DIM)
+    data_collator = CTCDataCollator(feature_dim=BINARY_FEATURE_DIM)
 
-    # trainer = Trainer(
-    #     model=model,
-    #     args=training_args,
-    #     train_dataset=dataset["train"],
-    #     eval_dataset=dataset[eval_split],
-    #     data_collator=data_collator,
-    #     compute_metrics=compute_metrics,
-    # )
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset[eval_split],
+        data_collator=data_collator,
+        compute_metrics=compute_metrics,
+    )
 
-    # trainer.train()
+    trainer.train()
 
-    # test_results = trainer.predict(dataset["test"])
-    # print(test_results.metrics)
+    test_results = trainer.predict(dataset["test"])
+    print(test_results.metrics)
 
-    # # print_per_feature_statistics(test_results)
+    # print_per_feature_statistics(test_results)
 
-    # wandb_run.finish()
+    wandb_run.finish()

@@ -71,7 +71,7 @@ mv_data = {
     "y":    ["v", "a", "v", "b", "u", "n"],
     "z":    ["v", "f", "c", "f", "u", "n"],
     "zh":   ["v", "f", "c", "f", "u", "n"],
-    "sil":  ["s_p", "s_m", "s_pl", "s_fb", "s_r", "s_c"] 
+    "sil":  ["s_p", "s_m", "s_pl", "s_fb", "s_r", "s_c"]
 }
 
 phoneme_mapping = {

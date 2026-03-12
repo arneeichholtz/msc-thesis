@@ -106,24 +106,39 @@ class Wav2Vec2ForArticulatoryFeatures(Wav2Vec2PreTrainedModel):
 class LinearCTCModel(nn.Module):
     def __init__(self, input_dim: int = 29, output_dim: int = 40):
         super().__init__()
-        self.linear = nn.Linear(input_dim, output_dim)
+        # self.linear = nn.Linear(input_dim, output_dim)
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+
+            nn.Linear(256, output_dim)
+        )
         self.ctc_loss = nn.CTCLoss(blank=0, reduction="mean")           # Zero_infitiy to True means infinite losses are set to 0. This can happen when e.g. the target seq is longer than the input
 
     def forward(self, input_values, attention_mask, labels):
-        # Input values shape: (batch, time, input_dim) = (32, 235, 29)
-        # Logits shape: (batch, time, output_dim) = (32, 235, 40)
-        logits = self.linear(input_values)
+        # input_values shape: (batch, max input length, input_dim) e.g. (32, 235, 29)
+        # Logits shape: (batch, max input length, output_dim) e.g. (32, 235, 40)
+        # attention_mask shape: (batch, max input length) e.g. (32, 235)
+        # labels shape: (batch, max label length) e.g. (32, 71)
+        
+        # logits = self.linear(input_values)
+        logits = self.net(input_values)
         log_probs = F.log_softmax(logits, dim=-1)       # CTC loss expects log_probs
 
-        # CTCLoss expects (time, batch, class)
+        # CTCLoss expects (input length, batch, class)
         ctc_log_probs = log_probs.transpose(0, 1)
 
         # Sum over attention mask to get valid input lengths
-        input_lengths = attention_mask.long().sum(dim=1)        # attention_mask shape: (batch, max_frames) -- input_lengths shape: (batch) = (32)
-
+        input_lengths = attention_mask.long().sum(dim=1)        # input_lengths shape: (batch) = (32) like [154, 142, 235, ...]
+       
         # Labels use -100 as padding value
-        target_lengths = (labels != -100).long().sum(dim=1)        # Shape: (batch) = (32)
-
+        target_lengths = (labels != -100).long().sum(dim=1)        # target_lengths shape: (batch) = (32) like [35, 34, 71, ...]
+        
         # Flatten targets by removing padded positions
         targets = labels[labels != -100]                # Targets are flattened. Shape: e.g. (1258) -- the sum of target_lengths
             
@@ -133,6 +148,7 @@ class LinearCTCModel(nn.Module):
             input_lengths,
             target_lengths
         )
+        
         output = {"logits": logits, "loss": loss}
         return output
 
