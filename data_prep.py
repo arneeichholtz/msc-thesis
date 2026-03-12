@@ -92,7 +92,7 @@ def phoneme_processing():
 
     # Save the features for the 39 reduced phonemes 
     phoneme_feature_dict = {
-        phoneme: full_phoneme_feature_dict[phoneme] for phoneme in set(phoneme_mapping.values())
+        phoneme: full_phoneme_feature_dict[phoneme] for phoneme in sorted(set(phoneme_mapping.values()))
     }
 
     return full_phoneme_feature_dict, phoneme_feature_dict
@@ -122,6 +122,8 @@ SILENCE_VECTOR: np.ndarray = PHONEME_BINARY_FEATURES.get(
 )
 
 PHONEME_TOKEN_TO_ID = phoneme_token_to_id()
+
+PHONEME_BIN_FEAT_VECTOR_TO_TOKEN = {tuple(v): k for k, v in PHONEME_BINARY_FEATURES.items()}        # Lookup from binary feature vector to phoneme label
 
 def reduce_phoneme(raw_phoneme: str) -> str:
     """Map raw TIMIT phoneme labels to the standard 39 reduced inventory. Raise ValueError if no mapping exists."""
@@ -215,9 +217,21 @@ def phoneme_sequence_to_ids(phonemes: List[str]) -> List[int]:
     return ids
 
 
+def binary_features_to_phoneme_sequence(feature_list):
+    return [PHONEME_TOKEN_TO_ID[PHONEME_BIN_FEAT_VECTOR_TO_TOKEN.get(tuple(f))] for f in feature_list]
+
+
 def format_for_ctc(batch):
     return {
         "input_values": batch["labels"],                # The frame labels from the concept layer (29-dim binary vector) are the inputs for CTC
         "labels": phoneme_sequence_to_ids(batch["phonetic_detail"]["utterance"])
+    }
+
+
+def format_for_ctc_phonsequence(batch):
+    """Format batch for CTC using frame-level phoneme sequence as labels, rather than ground truth (shorter) phoneme labels. (used for testing)"""
+    return {
+        "input_values": batch["labels"],                
+        "labels": binary_features_to_phoneme_sequence(batch["labels"])                      
     }
 

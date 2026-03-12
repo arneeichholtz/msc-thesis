@@ -22,9 +22,11 @@ from data_prep import (
     load_timit_dataset, 
     prepare_dataset, 
     phoneme_token_to_id, 
-    format_for_ctc
+    format_for_ctc,
+    format_for_ctc_phonsequence
 )
-from model import LinearCTCModel
+
+from model import LinearCTCModel, FrameLevelPhonemeModel
 
 CONFIG_PATH = Path("config.yml")
 
@@ -106,7 +108,7 @@ def prepare_ctc_dataset(config: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         dataset = dataset.map(
-            format_for_ctc,
+            format_for_ctc_phonsequence,
             desc="Formatting for CTC",
             load_from_cache_file=False,
         )
@@ -188,6 +190,30 @@ def compute_metrics(pred) -> Dict[str, float]:
     return {"phoneme_error_rate": float(phoneme_error_rate)}
 
 
+def compute_metrics_frame_level(pred) -> Dict[str, float]:
+    """Calculate frame-level phoneme accuracy, ignoring padding."""
+    logits = pred.predictions
+    label_ids = pred.label_ids
+
+    # Get the predicted IDs by taking the argmax over the vocabulary dimension
+    pred_ids = np.argmax(logits, axis=-1)
+
+    # Flatten the arrays to compute metrics easily
+    pred_ids_flat = pred_ids.flatten()
+    label_ids_flat = label_ids.flatten()
+
+    # Create a mask to ignore the padding tokens (-100 is standard CrossEntropy ignore_index)
+    mask = label_ids_flat != -100
+
+    valid_predictions = pred_ids_flat[mask]
+    valid_labels = label_ids_flat[mask]
+
+    # Calculate simple accuracy
+    accuracy = (valid_predictions == valid_labels).mean()
+
+    return {"accuracy": float(accuracy)}
+
+
 if __name__ == "__main__":
     
     config = load_training_config()
@@ -209,7 +235,8 @@ if __name__ == "__main__":
     vocab_size = len(PHONEME_TOKEN_TO_ID)
     print(f"Phoneme vocabulary size: {vocab_size}")
 
-    model = LinearCTCModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)
+    # model = LinearCTCModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)
+    model = FrameLevelPhonemeModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)
 
     training_args = TrainingArguments(
         output_dir=config["output_dir"],
@@ -235,7 +262,7 @@ if __name__ == "__main__":
         train_dataset=dataset["train"],
         eval_dataset=dataset[eval_split],
         data_collator=data_collator,
-        compute_metrics=compute_metrics,
+        compute_metrics=compute_metrics_frame_level,
     )
 
     trainer.train()

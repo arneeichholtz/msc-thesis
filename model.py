@@ -106,18 +106,18 @@ class Wav2Vec2ForArticulatoryFeatures(Wav2Vec2PreTrainedModel):
 class LinearCTCModel(nn.Module):
     def __init__(self, input_dim: int = 29, output_dim: int = 40):
         super().__init__()
-        # self.linear = nn.Linear(input_dim, output_dim)
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 256),
-            nn.ReLU(),
-            nn.Dropout(0.1),
+        self.linear = nn.Linear(input_dim, output_dim)
+        # self.net = nn.Sequential(
+        #     nn.Linear(input_dim, 256),
+        #     nn.ReLU(),
+        #     nn.Dropout(0.1),
 
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Dropout(0.1),
+        #     nn.Linear(256, 256),
+        #     nn.ReLU(),
+        #     nn.Dropout(0.1),
 
-            nn.Linear(256, output_dim)
-        )
+        #     nn.Linear(256, output_dim)
+        # )
         self.ctc_loss = nn.CTCLoss(blank=0, reduction="mean")           # Zero_infitiy to True means infinite losses are set to 0. This can happen when e.g. the target seq is longer than the input
 
     def forward(self, input_values, attention_mask, labels):
@@ -126,8 +126,8 @@ class LinearCTCModel(nn.Module):
         # attention_mask shape: (batch, max input length) e.g. (32, 235)
         # labels shape: (batch, max label length) e.g. (32, 71)
         
-        # logits = self.linear(input_values)
-        logits = self.net(input_values)
+        logits = self.linear(input_values)
+        # logits = self.net(input_values)
         log_probs = F.log_softmax(logits, dim=-1)       # CTC loss expects log_probs
 
         # CTCLoss expects (input length, batch, class)
@@ -151,4 +151,28 @@ class LinearCTCModel(nn.Module):
         
         output = {"logits": logits, "loss": loss}
         return output
+    
+
+
+class FrameLevelPhonemeModel(nn.Module):
+    def __init__(self, input_dim: int = 29, output_dim: int = 40):
+        super().__init__()
+        self.linear = nn.Linear(input_dim, output_dim)
+        self.loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
+
+    def forward(self, input_values, attention_mask, labels=None):
+        # input_values: (batch, seq_len, input_dim)
+        # labels: (batch, seq_len)
+        
+        logits = self.linear(input_values)
+        loss = None
+        
+        if labels is not None:
+            # CrossEntropy expects (batch, classes, seq_len) or flattened versions
+            logits_flat = logits.view(-1, logits.size(-1))
+            labels_flat = labels.view(-1)
+            
+            loss = self.loss_fn(logits_flat, labels_flat)
+            
+        return {"logits": logits, "loss": loss}
 
