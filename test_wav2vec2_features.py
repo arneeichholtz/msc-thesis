@@ -114,15 +114,15 @@ def load_training_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
 
 if __name__ == "__main__":
 
-    timit = load_timit_dataset(sample_validation_set=True, sample_validation_size=0.1)
-    timit = timit.map(extract_phonemes)
+    dataset = load_timit_dataset(sample_validation_set=True, sample_validation_size=0.1)
+    dataset = dataset.map(extract_phonemes)
 
-    vocabs = timit.map(
-        extract_all_phonemes, 
-        batched=True, 
-        batch_size=-1, 
-        keep_in_memory=True, 
-        remove_columns=timit.column_names["train"]
+    vocabs = dataset.map(
+        extract_all_phonemes,
+        batched=True,
+        batch_size=-1,
+        keep_in_memory=True,
+        remove_columns=dataset.column_names["train"]
     )
 
     eval_split_name = "validation" if "validation" in vocabs else "test"
@@ -156,7 +156,7 @@ if __name__ == "__main__":
 
     processor = Wav2Vec2Processor(feature_extractor=feature_extractor, tokenizer=tokenizer)
     
-    timit_prepared = timit.map(prepare_dataset, remove_columns=timit.column_names["train"], num_proc=4)
+    dataset_prepared = dataset.map(prepare_dataset, remove_columns=dataset.column_names["train"], num_proc=4)
     data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
 
     model = Wav2Vec2ForCTC.from_pretrained(
@@ -186,7 +186,7 @@ if __name__ == "__main__":
         config=config
     )
 
-    # 8. Training Configuration
+    # Training Configuration
     training_args = TrainingArguments(
         output_dir="/projects/0/prjs1921/thesis-speech/model_checkpoints",
         per_device_train_batch_size=32,
@@ -208,13 +208,13 @@ if __name__ == "__main__":
         data_collator=data_collator,
         args=training_args,
         compute_metrics=compute_metrics,
-        train_dataset=timit_prepared["train"],
-        eval_dataset=timit_prepared[eval_split_name],
+        train_dataset=dataset_prepared["train"],
+        eval_dataset=dataset_prepared[eval_split_name],
         tokenizer=processor.feature_extractor,
     )
 
     trainer.train()
-    test_results = trainer.predict(dataset["test"])
+    test_results = trainer.predict(dataset_prepared["test"])
     print(test_results.metrics)
 
     wandb_run.finish()
