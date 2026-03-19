@@ -115,8 +115,12 @@ def load_training_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
 if __name__ == "__main__":
 
     dataset = load_timit_dataset(sample_validation_set=True, sample_validation_size=0.1)
-    dataset = dataset.map(extract_phonemes)
 
+    # timit_subset = dataset["train"].select(range(100))
+    # dataset = DatasetDict({"train": timit_subset})
+    
+    dataset = dataset.map(extract_phonemes)
+    
     vocabs = dataset.map(
         extract_all_phonemes,
         batched=True,
@@ -124,6 +128,8 @@ if __name__ == "__main__":
         keep_in_memory=True,
         remove_columns=dataset.column_names["train"]
     )
+
+    print(len(vocabs['train'][0]['vocab']))
 
     eval_split_name = "validation" if "validation" in vocabs else "test"
     vocab_list = list(set(vocabs["train"]["vocab"][0]) | set(vocabs[eval_split_name]["vocab"][0]))
@@ -200,7 +206,9 @@ if __name__ == "__main__":
         learning_rate=1e-3,
         warmup_steps=1000,
         save_total_limit=1,
-        report_to="wandb"
+        report_to="wandb",
+        group_by_length=True,
+        weight_decay=0.005
     )
 
     trainer = Trainer(
