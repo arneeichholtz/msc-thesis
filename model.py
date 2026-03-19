@@ -158,7 +158,7 @@ class FrameLevelPhonemeModel(nn.Module):
     def __init__(self, input_dim: int = 29, output_dim: int = 40):
         super().__init__()
         self.linear = nn.Linear(input_dim, output_dim)
-        self.loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
+        self.loss_fn = nn.CrossEntropyLoss(ignore_index=-100)       # Also does softmax internally
 
     def forward(self, input_values, attention_mask, labels=None):
         # input_values: (batch, seq_len, input_dim)

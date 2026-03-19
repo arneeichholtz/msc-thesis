@@ -5,3 +5,4 @@ outputs/
 .env
 wandb/
 datasets/
+phoneme_vocab.json

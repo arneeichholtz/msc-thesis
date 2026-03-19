@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import os
 import wandb
 from dotenv import load_dotenv
@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 import torch
 import numpy as np
 import yaml
-from transformers import Trainer, TrainingArguments
+from transformers import Trainer, TrainingArguments, Wav2Vec2FeatureExtractor, Wav2Vec2Model
 
 from datasets import DatasetDict, load_from_disk
 from jiwer import wer
@@ -20,10 +20,11 @@ from jiwer import wer
 from data_prep import (
     BINARY_FEATURE_DIM, 
     load_timit_dataset, 
-    prepare_dataset, 
+    extract_framewise_binfeatures, 
     phoneme_token_to_id, 
     format_for_ctc,
-    format_for_ctc_phonsequence
+    format_for_ctc_framewiselabels,
+    compute_wav2vec2_hidden_states
 )
 
 from model import LinearCTCModel, FrameLevelPhonemeModel
@@ -39,18 +40,26 @@ ID_TO_PHONEME = {idx: token for token, idx in PHONEME_TOKEN_TO_ID.items()}
 class CTCDataCollator:
     """Pad frame-level articulatory inputs and phoneme targets for CTC."""
 
-    feature_dim: int = BINARY_FEATURE_DIM
+    feature_dim: Optional[int] = BINARY_FEATURE_DIM
     input_padding_value: float = 0.0
     label_padding_value: int = -100
 
     def __call__(self, features: List[Dict]) -> Dict[str, torch.Tensor]:
         batch_size = len(features)
+        if batch_size == 0:
+            raise ValueError("CTCDataCollator received an empty batch")
 
         frame_lengths = [len(f["input_values"]) for f in features]
         max_frames = max(frame_lengths)
+        effective_dim = self.feature_dim
+        if effective_dim is None:
+            first_sequence = features[0]["input_values"]
+            if not first_sequence:
+                raise ValueError("Unable to infer feature dimension from empty input sequence")
+            effective_dim = len(first_sequence[0])
 
         input_values = torch.full(
-            (batch_size, max_frames, self.feature_dim),
+            (batch_size, max_frames, effective_dim),
             self.input_padding_value,
             dtype=torch.float32,
         )       # Shape: (batch_size, max_frames, 29)
@@ -87,13 +96,17 @@ def load_training_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
         return yaml.safe_load(fp)
 
 
-def prepare_ctc_dataset(config: Dict[str, Any]) -> Dict[str, Any]:
-    dataset_path = config.get("processed_dataset_path_tl", "./datasets/processed_timit_dataset-tasklayer")
-    os.makedirs(Path(dataset_path).parent, exist_ok=True)
+def _needs_wav2vec2_inputs(config: Dict[str, Any]) -> bool:
+    return config.get("ctc_input_representation", "binary_concepts") == "wav2vec2_hidden"
 
-    if config["load_processed_dataset"] and Path(dataset_path).exists():
+
+def prepare_dataset_ctc(config: Dict[str, Any]) -> Dict[str, Any]:
+    dataset_path = Path(config.get("processed_dataset_path_tl", "./datasets/processed_timit_dataset-tasklayer"))
+    os.makedirs(dataset_path.parent, exist_ok=True)
+
+    if config["load_processed_dataset"] and dataset_path.exists():
         print(f"Loading processed TIMIT dataset from {dataset_path}...")
-        dataset = load_from_disk(dataset_path)
+        dataset = load_from_disk(str(dataset_path))
     else:
         print("Loading and processing TIMIT dataset...")
         dataset = load_timit_dataset(config["sample_validation_set"], config.get("sample_validation_size", 0.10))
@@ -102,16 +115,52 @@ def prepare_ctc_dataset(config: Dict[str, Any]) -> Dict[str, Any]:
         # dataset = DatasetDict({"train": timit_subset})
     
         dataset = dataset.map(
-            prepare_dataset,
+            extract_framewise_binfeatures,
             desc="Aligning articulatory features",
             load_from_cache_file=False,
         )
 
-        dataset = dataset.map(
-            format_for_ctc_phonsequence,
-            desc="Formatting for CTC",
-            load_from_cache_file=False,
-        )
+        use_wav2vec2_inputs = _needs_wav2vec2_inputs(config)
+        input_field = "wav2vec2_features" if use_wav2vec2_inputs else "labels"
+
+        if use_wav2vec2_inputs:
+            checkpoint = config.get("wav2vec2_feature_checkpoint", config["model_checkpoint"])
+            feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(checkpoint)
+            wav2vec2_model = Wav2Vec2Model.from_pretrained(checkpoint)
+            wav2vec2_model.eval()
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            wav2vec2_model.to(device)
+            batch_size = config.get("wav2vec2_feature_batch_size", 4)
+            dataset = dataset.map(
+                compute_wav2vec2_hidden_states,
+                batched=True,
+                batch_size=batch_size,
+                fn_kwargs={
+                    "feature_extractor": feature_extractor,
+                    "wav2vec2_model": wav2vec2_model,
+                    "device": device,
+                },
+                desc="Extracting wav2vec2 hidden states",
+                load_from_cache_file=False,
+            )
+            wav2vec2_model.to("cpu")
+
+        format_kwargs = {"input_field": input_field}
+
+        if config["framewise_labels"]:      # Use framewise labels
+            dataset = dataset.map(
+                format_for_ctc_framewiselabels,
+                fn_kwargs=format_kwargs,
+                desc="Formatting for CTC using framewise labels",
+                load_from_cache_file=False,
+            )
+        else:
+            dataset = dataset.map(
+                format_for_ctc,
+                fn_kwargs=format_kwargs,
+                desc="Formatting for CTC",
+                load_from_cache_file=False,
+            )
 
         keep_columns = {"input_values", "labels"}
         for split in dataset.keys():
@@ -122,7 +171,7 @@ def prepare_ctc_dataset(config: Dict[str, Any]) -> Dict[str, Any]:
                 dataset[split] = dataset[split].remove_columns(remove_columns)
 
         print(f"Saving processed dataset to {dataset_path}...")
-        dataset.save_to_disk(dataset_path)
+        dataset.save_to_disk(str(dataset_path))
 
     return dataset
 
@@ -225,18 +274,28 @@ if __name__ == "__main__":
     wandb_run = wandb.init(
         project=config["wandb_project"],
         name=config["run_name"],
-        config=config,
+        config=config
     )
 
-    dataset = prepare_ctc_dataset(config)
+    dataset = prepare_dataset_ctc(config)
     eval_split = "validation" if "validation" in dataset else "test"
     print("eval split:", eval_split)
 
     vocab_size = len(PHONEME_TOKEN_TO_ID)
     print(f"Phoneme vocabulary size: {vocab_size}")
 
-    # model = LinearCTCModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)
-    model = FrameLevelPhonemeModel(input_dim=BINARY_FEATURE_DIM, output_dim=vocab_size)
+    sample_feature = dataset["train"][0]["input_values"]
+    input_feature_dim = len(sample_feature[0])
+    print(f"CTC input feature dimension: {input_feature_dim}")
+
+    if config["framewise_labels"]:
+        print("Using frame-level phoneme labels for training.")
+        model = FrameLevelPhonemeModel(input_dim=input_feature_dim, output_dim=vocab_size)
+        compute_metrics_fn = compute_metrics_frame_level
+    else:
+        print("Using phoneme sequence labels for CTC training.")
+        model = LinearCTCModel(input_dim=input_feature_dim, output_dim=vocab_size)
+        compute_metrics_fn = compute_metrics
 
     training_args = TrainingArguments(
         output_dir=config["output_dir"],
@@ -254,7 +313,7 @@ if __name__ == "__main__":
         report_to="wandb",
     )
 
-    data_collator = CTCDataCollator(feature_dim=BINARY_FEATURE_DIM)
+    data_collator = CTCDataCollator(feature_dim=input_feature_dim)
 
     trainer = Trainer(
         model=model,
@@ -262,7 +321,7 @@ if __name__ == "__main__":
         train_dataset=dataset["train"],
         eval_dataset=dataset[eval_split],
         data_collator=data_collator,
-        compute_metrics=compute_metrics_frame_level,
+        compute_metrics=compute_metrics_fn,
     )
 
     trainer.train()

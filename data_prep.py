@@ -12,8 +12,9 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
+import torch
 from datasets import Audio, DatasetDict, IterableDatasetDict, load_dataset
-from transformers import Wav2Vec2FeatureExtractor
+from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model
 
 from features_config.features import (
     central_labels,
@@ -135,7 +136,7 @@ def reduce_phoneme(raw_phoneme: str) -> str:
         return mapped_phoneme
 
 
-def prepare_dataset(batch: Dict) -> Dict:
+def extract_framewise_binfeatures(batch: Dict) -> Dict:
     """Frame-align articulatory feature vectors for a single TIMIT example."""
     audio = batch["audio"]
     waveform = np.asarray(audio["array"], dtype=np.float32)         # E.g. shaped: (50434,)
@@ -192,6 +193,47 @@ def compute_inputs(batch: Dict, feature_extractor: Wav2Vec2FeatureExtractor) -> 
     return batch
 
 
+def compute_wav2vec2_hidden_states(
+    batch: Dict,
+    feature_extractor: Wav2Vec2FeatureExtractor,
+    wav2vec2_model: Wav2Vec2Model,
+    device: torch.device,
+) -> Dict:
+    """Attach wav2vec2 hidden states (per-frame features) to a dataset batch."""
+    audio_arrays = [item["array"] for item in batch["audio"]]
+    extractor_outputs = feature_extractor(
+        audio_arrays,
+        sampling_rate=TARGET_SAMPLING_RATE,
+        padding=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+
+    input_values = extractor_outputs["input_values"].to(device)
+    attention_mask = extractor_outputs["attention_mask"].to(device)
+
+    with torch.no_grad():
+        outputs = wav2vec2_model(
+            input_values,
+            attention_mask=attention_mask,
+            output_hidden_states=False,
+            return_dict=True,
+        )
+
+    hidden_states = outputs.last_hidden_state.cpu()
+    output_lengths = wav2vec2_model._get_feat_extract_output_lengths(  # type: ignore[attr-defined]
+        attention_mask.sum(dim=1)
+    ).to(torch.long)
+
+    features: List[List[List[float]]] = []
+    for idx, seq_len in enumerate(output_lengths.tolist()):
+        truncated = hidden_states[idx, :seq_len].numpy().astype(np.float32)
+        features.append(truncated.tolist())
+
+    batch["wav2vec2_features"] = features
+    return batch
+
+
 def load_timit_dataset(sample_validation_set: bool = True, sample_validation_size: float = 0.1) -> DatasetDict | IterableDatasetDict:
     """Load the TIMIT ASR dataset, sample validation set and resample at 16 kHz."""
     dataset = load_dataset("timit_asr")
@@ -221,17 +263,23 @@ def binary_features_to_phoneme_sequence(feature_list):
     return [PHONEME_TOKEN_TO_ID[PHONEME_BIN_FEAT_VECTOR_TO_TOKEN.get(tuple(f))] for f in feature_list]
 
 
-def format_for_ctc(batch):
+def _ensure_serializable_inputs(values):
+    if isinstance(values, np.ndarray):
+        return values.tolist()
+    return values
+
+
+def format_for_ctc(batch: Dict, input_field: str = "labels") -> Dict:
     return {
-        "input_values": batch["labels"],                # The frame labels from the concept layer (29-dim binary vector) are the inputs for CTC
+        "input_values": _ensure_serializable_inputs(batch[input_field]),
         "labels": phoneme_sequence_to_ids(batch["phonetic_detail"]["utterance"])
     }
 
 
-def format_for_ctc_phonsequence(batch):
+def format_for_ctc_framewiselabels(batch: Dict, input_field: str = "labels") -> Dict:
     """Format batch for CTC using frame-level phoneme sequence as labels, rather than ground truth (shorter) phoneme labels. (used for testing)"""
     return {
-        "input_values": batch["labels"],                
-        "labels": binary_features_to_phoneme_sequence(batch["labels"])                      
+        "input_values": _ensure_serializable_inputs(batch[input_field]),
+        "labels": binary_features_to_phoneme_sequence(batch["labels"])
     }
 
