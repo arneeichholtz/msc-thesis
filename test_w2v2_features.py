@@ -96,7 +96,7 @@ def compute_metrics(pred):
     pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id
 
     # Decode predictions and labels to strings
-    pred_str = processor.batch_decode(pred_ids)
+    pred_str = processor.batch_decode(pred_ids, group_tokens=True)
     label_str = processor.batch_decode(pred.label_ids, group_tokens=False)
 
     # Calculate Phoneme Error Rate using jiwer's wer function
@@ -139,7 +139,7 @@ if __name__ == "__main__":
     vocab_dict["[UNK]"] = len(vocab_dict)
     vocab_dict["[PAD]"] = len(vocab_dict)
     # CTC models use a delimiter for words, even if predicting phonemes
-    vocab_dict["|"] = len(vocab_dict)
+    # vocab_dict["|"] = len(vocab_dict)
 
     with open('phoneme_vocab.json', 'w') as vocab_file:
         json.dump(vocab_dict, vocab_file)
@@ -149,7 +149,7 @@ if __name__ == "__main__":
         "./phoneme_vocab.json", 
         unk_token="[UNK]", 
         pad_token="[PAD]", 
-        word_delimiter_token="|"
+        # word_delimiter_token="|"
     )
 
     feature_extractor = Wav2Vec2FeatureExtractor(
@@ -172,14 +172,15 @@ if __name__ == "__main__":
         vocab_size=len(processor.tokenizer)
     )
 
-    # Freeze all parameters
+    # Freeze parameters
     model.freeze_feature_extractor() # Standard helper for conv layers
-    for param in model.parameters():
-        param.requires_grad = False
+    
+    # for param in model.parameters():
+    #     param.requires_grad = False
 
-    # Unfreeze only the LM Head (the linear projection)
-    for param in model.lm_head.parameters():
-        param.requires_grad = True
+    # # Unfreeze only the LM Head (the linear projection)
+    # for param in model.lm_head.parameters():
+    #     param.requires_grad = True
 
     config = load_training_config()
     load_dotenv()
@@ -188,7 +189,7 @@ if __name__ == "__main__":
         
     wandb_run = wandb.init(
         project="thesis-cbm",
-        name="test-wav2vec2-features",
+        name="test-wav2vec2-features-ft_all_layers",
         config=config
     )
 
@@ -200,8 +201,8 @@ if __name__ == "__main__":
         eval_strategy="steps",
         num_train_epochs=20,
         fp16=True,
-        save_steps=500,
-        eval_steps=500,
+        save_steps=100,
+        eval_steps=100,
         logging_steps=20,
         learning_rate=1e-3,
         warmup_steps=1000,

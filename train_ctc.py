@@ -321,7 +321,7 @@ if __name__ == "__main__":
         train_dataset=dataset["train"],
         eval_dataset=dataset[eval_split],
         data_collator=data_collator,
-        compute_metrics=compute_metrics_fn,
+        compute_metrics=compute_metrics_fn
     )
 
     trainer.train()

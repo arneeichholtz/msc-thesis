@@ -6,3 +6,4 @@ outputs/
 wandb/
 datasets/
 phoneme_vocab.json
+vocab.json
