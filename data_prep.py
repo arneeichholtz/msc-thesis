@@ -110,13 +110,15 @@ def phoneme_token_to_id():
     token_to_id.update({token: idx + 1 for idx, token in enumerate(unique_tokens)})
     return token_to_id
 
+def get_phoneme_binary_features() -> Dict[str, np.ndarray]:
+    """ Converts phoneme to corresponding binary feature vector. """
+    return {phoneme: _indices_to_binary_vector(index_vector)
+            for phoneme, index_vector in CANONICAL_PHONEME_IDX_DICT.items()}
+
 
 _, CANONICAL_PHONEME_IDX_DICT = phoneme_processing()        # Maps phoneme labels to their corresponding feature index vectors, like 'g': [0, 1, 6, 0, 0, 2],
 
-PHONEME_BINARY_FEATURES: Dict[str, np.ndarray] = {          # Converts phoneme to corresponding binary feature vector
-    phoneme: _indices_to_binary_vector(index_vector)
-    for phoneme, index_vector in CANONICAL_PHONEME_IDX_DICT.items()
-}
+PHONEME_BINARY_FEATURES = get_phoneme_binary_features()
 
 SILENCE_VECTOR: np.ndarray = PHONEME_BINARY_FEATURES.get(
     "sil", np.zeros(BINARY_FEATURE_DIM, dtype=np.int8)
