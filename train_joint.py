@@ -219,6 +219,18 @@ def compute_metrics(pred) -> Dict[str, float]:
     return {"phoneme_error_rate": float(phoneme_error_rate)}
 
 
+def unfreeze_encoder_layers(model, layer_indices: List[int]) -> None:
+    """Unfreeze specific wav2vec2 encoder transformer layers by index."""
+    if layer_indices is None:
+        return
+
+    encoder_layers = model.wav2vec2.encoder.layers
+
+    for layer_idx in layer_indices:
+        for param in encoder_layers[layer_idx].parameters():
+            param.requires_grad = True
+
+
 if __name__ == "__main__":
     
     config = load_training_config()
@@ -233,56 +245,59 @@ if __name__ == "__main__":
     vocab_size = len(PHONEME_TOKEN_TO_ID)
     print(f"Phoneme vocabulary size: {vocab_size}")
 
-    # model = Wav2Vec2ForJointBottleneck.from_pretrained(     # Use from_pretrained so trained weights are used
-    #     model_checkpoint,
-    #     num_concepts=BINARY_FEATURE_DIM,
-    #     vocab_size=vocab_size,
-    #     joint_lambda=config["joint_lambda"],
-    #     use_safetensors=True
-    # )
+    model = Wav2Vec2ForJointBottleneck.from_pretrained(     # Use from_pretrained so trained weights are used
+        model_checkpoint,
+        num_concepts=BINARY_FEATURE_DIM,
+        vocab_size=vocab_size,
+        joint_lambda=config.get("joint_lambda", 1.0),
+        use_safetensors=True
+    )
 
-    # load_dotenv()
-    # api_key = os.getenv("WANDB_API_KEY")
-    # wandb.login(key=api_key)
+    if config.get("use_initial_unfreeze"):
+        unfreeze_encoder_layers(model, config.get("unfreeze_layers", []))
 
-    # wandb_run = wandb.init(
-    #     project=config["wandb_project"],
-    #     name=config["run_name"],
-    #     config=config,
-    # )
+    load_dotenv()
+    api_key = os.getenv("WANDB_API_KEY")
+    wandb.login(key=api_key)
 
-    # training_args = TrainingArguments(
-    #     output_dir=config.get("output_dir_joint", config["output_dir"]),
-    #     eval_strategy=config["eval_strategy"],
-    #     learning_rate=config["learning_rate"],
-    #     per_device_train_batch_size=config["per_device_train_batch_size"],
-    #     per_device_eval_batch_size=config["per_device_eval_batch_size"],
-    #     num_train_epochs=config["num_train_epochs"],
-    #     logging_steps=config["logging_steps"],
-    #     save_steps=config["save_steps"],
-    #     eval_steps=config["eval_steps"],
-    #     warmup_steps=config["warmup_steps"],
-    #     save_total_limit=config["save_total_limit"],
-    #     fp16=config["use_fp16"],
-    #     report_to="wandb",
-    # )
+    wandb_run = wandb.init(
+        project=config["wandb_project"],
+        name=config["run_name"],
+        config=config,
+    )
 
-    # data_collator = JointDataCollator(concept_label_dim=BINARY_FEATURE_DIM)
+    training_args = TrainingArguments(
+        output_dir=config.get("output_dir_joint", config["output_dir"]),
+        eval_strategy=config["eval_strategy"],
+        learning_rate=config["learning_rate"],
+        per_device_train_batch_size=config["per_device_train_batch_size"],
+        per_device_eval_batch_size=config["per_device_eval_batch_size"],
+        num_train_epochs=config["num_train_epochs"],
+        logging_steps=config["logging_steps"],
+        save_steps=config["save_steps"],
+        eval_steps=config["eval_steps"],
+        warmup_steps=config["warmup_steps"],
+        save_total_limit=config["save_total_limit"],
+        fp16=config["use_fp16"],
+        report_to="wandb",
+    )
 
-    # trainer = Trainer(
-    #     model=model,
-    #     args=training_args,
-    #     train_dataset=dataset["train"],
-    #     eval_dataset=dataset[eval_split],
-    #     data_collator=data_collator,
-    #     tokenizer=feature_extractor,
-    #     compute_metrics=compute_metrics,
-    #     label_names=["concept_labels", "task_labels"],
-    # )
+    data_collator = JointDataCollator(concept_label_dim=BINARY_FEATURE_DIM)
 
-    # trainer.train()
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset[eval_split],
+        data_collator=data_collator,
+        tokenizer=feature_extractor,
+        compute_metrics=compute_metrics,
+        label_names=["concept_labels", "task_labels"],
+    )
 
-    # test_results = trainer.predict(dataset["test"])
-    # print(test_results.metrics)
+    trainer.train()
 
-    # wandb_run.finish()
+    test_results = trainer.predict(dataset["test"])
+    print(test_results.metrics)
+
+    wandb_run.finish()
