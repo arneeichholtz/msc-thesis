@@ -114,6 +114,8 @@ class Wav2Vec2ForJointBottleneck(Wav2Vec2PreTrainedModel):
         self.concept_loss_fn = BCEWithLogitsLoss(reduction="none")
         self.ctc_loss_fn = nn.CTCLoss(blank=0, reduction="mean")
         self.joint_lambda = float(joint_lambda)
+        
+        self.wav2vec2.requires_grad_(False)         # Freeze all wav2vec2 params by default
 
         self.post_init()
 

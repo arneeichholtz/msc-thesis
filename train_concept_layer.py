@@ -248,12 +248,11 @@ def initialize_model(config):
 
     initial_unfreeze = config.get("use_initial_unfreeze", False)
     if initial_unfreeze:
-        assert config.get("unfreeze_layers") is not None, "unfreeze_layers cannot be None if use_initial_unfreeze is True"
         unfreeze_layers = config.get("unfreeze_layers")
         for layer_idx in unfreeze_layers:
             assert 0 <= layer_idx < len(model.wav2vec2.encoder.layers), f"Layer index {layer_idx} is out of bounds for wav2vec2 encoder layers."
         unfreeze_encoder_layers(model, unfreeze_layers)
-        print(f"Initially unfreeze encoder layers {unfreeze_layers}.")
+        print(f"Wav2Vec2 encoder layers included for fine-tuning: {unfreeze_layers}.")
     else:
         print("Using Default: keeping all wav2vec2 encoder layers frozen at the start of training.")
 
