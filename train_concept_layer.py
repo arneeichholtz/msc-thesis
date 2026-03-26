@@ -116,8 +116,8 @@ def compute_metrics(eval_pred):
     macro_precision = precision_score(labels_flat, predictions, average='macro', zero_division=0)
     macro_recall = recall_score(labels_flat, predictions, average='macro', zero_division=0)
     
-    # Subset Accuracy: Strict (All 29 features must match)
-    subset_accuracy = accuracy_score(labels_flat, predictions)
+    # Vector Accuracy: Strict (All 29 features of the vector must match)
+    vect_accuracy = accuracy_score(labels_flat, predictions)
     
     # Element-wise Accuracy: Treat every one of the 29 decisions independently
     element_wise_acc = (predictions == labels_flat).mean()
@@ -127,7 +127,7 @@ def compute_metrics(eval_pred):
         "micro_f1": micro_f1,
         "macro_precision": macro_precision,
         "macro_recall": macro_recall,
-        "subset_accuracy": subset_accuracy,
+        "vect_accuracy": vect_accuracy,
         "element_wise_accuracy": element_wise_acc
     }
 
@@ -194,7 +194,7 @@ def print_per_feature_statistics(test_results):
     per_feature_acc_dict = {f"{feature_labels[i]}": float(per_feature_accuracy[i]) for i in range(len(feature_labels))}
     print(per_feature_acc_dict)
 
-def train_preprocessing(config, feature_extractor):
+def prepare_dataset_cl(config, feature_extractor):
     dataset_path = config.get("processed_dataset_path_cl", "./datasets/processed_timit_dataset-")
     os.makedirs(Path(dataset_path).parent, exist_ok=True)
     
@@ -233,6 +233,10 @@ def train_preprocessing(config, feature_extractor):
         print(f"Saving processed dataset to: {dataset_path}")
         dataset.save_to_disk(dataset_path)
     
+    return dataset
+
+
+def initialize_model(config):
     num_labels = BINARY_FEATURE_DIM
     model_checkpoint = config["model_checkpoint"]
 
@@ -252,8 +256,6 @@ def train_preprocessing(config, feature_extractor):
         print(f"Initially unfreeze encoder layers {unfreeze_layers}.")
     else:
         print("Using Default: keeping all wav2vec2 encoder layers frozen at the start of training.")
-    
-    return dataset, model
 
 
 
@@ -265,7 +267,11 @@ if __name__ == "__main__":
     model_checkpoint = config["model_checkpoint"]
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_checkpoint)
     
-    dataset, model = train_preprocessing(config, feature_extractor)
+    dataset = prepare_dataset_cl(config, feature_extractor)
+    model = initialize_model(config)
+
+    eval_split = "validation" if "validation" in dataset else "test"
+    print(f"Evaluation split: {eval_split}")
 
     load_dotenv()
     api_key = os.getenv("WANDB_API_KEY")
@@ -295,10 +301,6 @@ if __name__ == "__main__":
 
     num_labels = BINARY_FEATURE_DIM
     data_collator = ArticulatoryFeatureDataCollator(label_dim=num_labels)
-
-    eval_split = "validation" if "validation" in dataset else "test"
-
-    print(f"Evaluation split: {eval_split}")
 
     trainer = Trainer(      # Trainer handles device placement
         model=model,

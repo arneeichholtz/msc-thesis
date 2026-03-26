@@ -325,3 +325,12 @@ def format_for_ctc_framewiselabels(batch: Dict, input_field: str = "labels") -> 
         "labels": binary_features_to_phoneme_sequence(batch["labels"])
     }
 
+
+def format_for_joint(batch: Dict) -> Dict:
+    """Format batch for joint training with concept and task labels."""
+    return {
+        "input_values": _ensure_serializable_inputs(batch["input_values"]),
+        "concept_labels": _ensure_serializable_inputs(batch["labels"]),
+        "task_labels": phoneme_sequence_to_ids(batch["phonetic_detail"]["utterance"]),
+    }
+

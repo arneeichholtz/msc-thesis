@@ -2,11 +2,11 @@
 
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=1
-#SBATCH --job-name=run_train_ctc
+#SBATCH --job-name=run_train_tl
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --time=01:00:00
-#SBATCH --output=outputs/run_train_ctc_%A.out
+#SBATCH --output=outputs/run_train_tl_%A.out
 
 module purge
 module load 2023

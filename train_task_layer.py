@@ -113,7 +113,7 @@ def _get_input_field(config: Dict[str, Any]) -> str:
     )
 
 
-def prepare_dataset_ctc(config: Dict[str, Any]) -> Dict[str, Any]:
+def prepare_dataset_tl(config: Dict[str, Any]) -> Dict[str, Any]:
     tl_input_representation = config.get("tl_input_representation", "binary_concepts")      # Task layer input representation
     dataset_path = config.get("processed_dataset_path_tl")
     dataset_path = Path(dataset_path)
@@ -323,17 +323,7 @@ if __name__ == "__main__":
     
     config = load_training_config()
 
-    load_dotenv()
-    api_key = os.getenv("WANDB_API_KEY")
-    wandb.login(key=api_key)
-    
-    wandb_run = wandb.init(
-        project=config["wandb_project"],
-        name=config["run_name"],
-        config=config
-    )
-
-    dataset = prepare_dataset_ctc(config)
+    dataset = prepare_dataset_tl(config)
     eval_split = "validation" if "validation" in dataset else "test"
     print("eval split:", eval_split)
 
@@ -353,6 +343,16 @@ if __name__ == "__main__":
         model = LinearCTCModel(input_dim=input_feature_dim, output_dim=vocab_size)
         compute_metrics_fn = compute_metrics
 
+    load_dotenv()
+    api_key = os.getenv("WANDB_API_KEY")
+    wandb.login(key=api_key)
+    
+    wandb_run = wandb.init(
+        project=config["wandb_project"],
+        name=config["run_name"],
+        config=config
+    )
+    
     training_args = TrainingArguments(
         output_dir=config["output_dir"],
         eval_strategy=config["eval_strategy"],
