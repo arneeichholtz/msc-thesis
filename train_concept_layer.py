@@ -21,13 +21,12 @@ from transformers import (
 
 from datasets import DatasetDict, load_from_disk
 
-from callbacks import UnfreezingCallback, unfreeze_encoder_layers
 from data_prep import (
     BINARY_FEATURE_DIM,
     TARGET_SAMPLING_RATE,
     load_timit_dataset,
-    prepare_dataset,
-    compute_inputs,
+    extract_framewise_binfeatures,
+    prepare_audio_samples,
     FEATURE_GROUPS_LABELS
 )
 from model import Wav2Vec2ForArticulatoryFeatures
@@ -79,6 +78,18 @@ class ArticulatoryFeatureDataCollator:
 def load_training_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as fp:
         return yaml.safe_load(fp)
+
+
+def unfreeze_encoder_layers(model, layer_indices: List[int]) -> None:
+    """Unfreeze specific wav2vec2 encoder transformer layers by index."""
+    if layer_indices is None:
+        return
+
+    encoder_layers = model.wav2vec2.encoder.layers
+
+    for layer_idx in layer_indices:
+        for param in encoder_layers[layer_idx].parameters():
+            param.requires_grad = True
     
 
 def compute_metrics(eval_pred):
@@ -198,13 +209,13 @@ def train_preprocessing(config, feature_extractor):
         # dataset = DatasetDict({"train": timit_subset})
         
         dataset = dataset.map(
-            prepare_dataset,
-            desc="Aligning articulatory features",
+            extract_framewise_binfeatures,
+            desc="Extracting binary articulatory features for frames",
             load_from_cache_file=False
         )
         
         dataset = dataset.map(
-            compute_inputs,
+            prepare_audio_samples,
             batched=True,       # Defaults to standard batch size=1000 for dataset library
             fn_kwargs={"feature_extractor": feature_extractor},
             desc="Extracting wav2vec2 inputs",
@@ -219,7 +230,7 @@ def train_preprocessing(config, feature_extractor):
             if remove_columns:
                 dataset[split] = dataset[split].remove_columns(remove_columns)
             
-        print(f"Saving processed dataset to {dataset_path}...")
+        print(f"Saving processed dataset to: {dataset_path}")
         dataset.save_to_disk(dataset_path)
     
     num_labels = BINARY_FEATURE_DIM
@@ -238,7 +249,7 @@ def train_preprocessing(config, feature_extractor):
         for layer_idx in unfreeze_layers:
             assert 0 <= layer_idx < len(model.wav2vec2.encoder.layers), f"Layer index {layer_idx} is out of bounds for wav2vec2 encoder layers."
         unfreeze_encoder_layers(model, unfreeze_layers)
-        print(f"Initially unfroze encoder layers {unfreeze_layers}.")
+        print(f"Initially unfreeze encoder layers {unfreeze_layers}.")
     else:
         print("Using Default: keeping all wav2vec2 encoder layers frozen at the start of training.")
     
@@ -250,6 +261,11 @@ def train_preprocessing(config, feature_extractor):
 if __name__ == "__main__":
     
     config = load_training_config()
+    
+    model_checkpoint = config["model_checkpoint"]
+    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_checkpoint)
+    
+    dataset, model = train_preprocessing(config, feature_extractor)
 
     load_dotenv()
     api_key = os.getenv("WANDB_API_KEY")
@@ -260,11 +276,6 @@ if __name__ == "__main__":
         name=config["run_name"],
         config=config,
     )
-    
-    model_checkpoint = config["model_checkpoint"]
-    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_checkpoint)
-    
-    dataset, model = train_preprocessing(config, feature_extractor)
 
     training_args = TrainingArguments(
         output_dir=config["output_dir"],
@@ -289,13 +300,6 @@ if __name__ == "__main__":
 
     print(f"Evaluation split: {eval_split}")
 
-    # Define callbacks list
-    callbacks = []
-    if config.get("use_callback_unfreeze", False):              # Defaults to False if not in config, meaning all wav2vec2 layers will be kept frozen
-        callbacks.append(UnfreezingCallback(model, 
-                                            thaw_step=config["thaw_step"], 
-                                            unfreeze_layers=config.get("unfreeze_layers", None)))
-
     trainer = Trainer(      # Trainer handles device placement
         model=model,
         args=training_args,
@@ -303,7 +307,6 @@ if __name__ == "__main__":
         eval_dataset=dataset[eval_split],
         data_collator=data_collator,
         tokenizer=feature_extractor,
-        callbacks=callbacks,
         compute_metrics=compute_metrics
     )
 

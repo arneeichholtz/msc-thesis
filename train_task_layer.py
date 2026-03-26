@@ -13,6 +13,7 @@ import torch
 import numpy as np
 import yaml
 from transformers import Trainer, TrainingArguments, Wav2Vec2FeatureExtractor, Wav2Vec2Model
+from transformers.trainer_utils import get_last_checkpoint
 
 from datasets import DatasetDict, load_from_disk
 from jiwer import wer
@@ -24,10 +25,11 @@ from data_prep import (
     phoneme_token_to_id, 
     format_for_ctc,
     format_for_ctc_framewiselabels,
-    compute_wav2vec2_hidden_states
+    compute_wav2vec2_hidden_states,
+    compute_concept_logits,
 )
 
-from model import LinearCTCModel, FrameLevelPhonemeModel
+from model import LinearCTCModel, FrameLevelPhonemeModel, Wav2Vec2ForArticulatoryFeatures
 
 CONFIG_PATH = Path("config.yml")
 
@@ -96,16 +98,35 @@ def load_training_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
         return yaml.safe_load(fp)
 
 
-def _needs_wav2vec2_inputs(config: Dict[str, Any]) -> bool:
-    return config.get("ctc_input_representation", "binary_concepts") == "wav2vec2_hidden"
+def _get_input_field(config: Dict[str, Any]) -> str:
+    tl_input_representation = config.get("tl_input_representation", "binary_concepts")
+    if tl_input_representation == "binary_concepts":
+        return "labels"         # Labels since the input for the task layer are the labels from the concept layer
+    if tl_input_representation == "concept_logits":
+        return "concept_logits"
+    if tl_input_representation == "w2v2_features":
+        return "w2v2_features"
+    raise ValueError(
+        "Unsupported tl_input_representation='"
+        f"{tl_input_representation}'. "
+        "Choose one of: 'binary_concepts', 'concept_logits', 'w2v2_features'."
+    )
 
 
 def prepare_dataset_ctc(config: Dict[str, Any]) -> Dict[str, Any]:
-    dataset_path = Path(config.get("processed_dataset_path_tl", "./datasets/processed_timit_dataset-tasklayer"))
+    tl_input_representation = config.get("tl_input_representation", "binary_concepts")      # Task layer input representation
+    dataset_path = config.get("processed_dataset_path_tl")
+    dataset_path = Path(dataset_path)
+    dataset_path = dataset_path.with_name(dataset_path.stem + f"-{tl_input_representation}")
+    if config.get("framewise_labels"):
+        dataset_path = dataset_path.with_name(dataset_path.stem + "-framewise_labels")
+
+    print(f"Dataset path: {dataset_path}")
+    
     os.makedirs(dataset_path.parent, exist_ok=True)
 
     if config["load_processed_dataset"] and dataset_path.exists():
-        print(f"Loading processed TIMIT dataset from {dataset_path}...")
+        print(f"Loading processed TIMIT dataset from: {dataset_path}")
         dataset = load_from_disk(str(dataset_path))
     else:
         print("Loading and processing TIMIT dataset...")
@@ -116,14 +137,49 @@ def prepare_dataset_ctc(config: Dict[str, Any]) -> Dict[str, Any]:
     
         dataset = dataset.map(
             extract_framewise_binfeatures,
-            desc="Aligning articulatory features",
+            desc="Extracting binary articulatory features for frames",
             load_from_cache_file=False,
         )
 
-        use_wav2vec2_inputs = _needs_wav2vec2_inputs(config)
-        input_field = "wav2vec2_features" if use_wav2vec2_inputs else "labels"
+        input_field = _get_input_field(config)
 
-        if use_wav2vec2_inputs:
+        if input_field == "concept_logits":
+            concept_checkpoint_folder = config.get("concept_checkpoint_folder")
+            
+            if concept_checkpoint_folder is None:
+                raise ValueError(
+                    "tl_input_representation='concept_logits' requires 'concept_checkpoint_folder' "
+                    "pointing to a trained checkpoint from train.py"
+                )
+
+            if os.path.isdir(concept_checkpoint_folder):
+                concept_checkpoint = get_last_checkpoint(concept_checkpoint_folder)
+
+            feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(config.get("model_checkpoint"))
+            concept_model = Wav2Vec2ForArticulatoryFeatures.from_pretrained(
+                concept_checkpoint,
+                num_labels=BINARY_FEATURE_DIM,
+            )
+            concept_model.eval()
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            concept_model.to(device)
+
+            batch_size = config.get("concept_logits_batch_size", 4)
+            dataset = dataset.map(
+                compute_concept_logits,
+                batched=True,
+                batch_size=batch_size,
+                fn_kwargs={
+                    "feature_extractor": feature_extractor,
+                    "concept_model": concept_model,
+                    "device": device,
+                },
+                desc="Extracting concept logits from trained concept model",
+                load_from_cache_file=False,
+            )
+            concept_model.to("cpu")
+
+        if input_field == "w2v2_features":
             checkpoint = config.get("wav2vec2_feature_checkpoint", config["model_checkpoint"])
             feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(checkpoint)
             wav2vec2_model = Wav2Vec2Model.from_pretrained(checkpoint)
@@ -147,7 +203,7 @@ def prepare_dataset_ctc(config: Dict[str, Any]) -> Dict[str, Any]:
 
         format_kwargs = {"input_field": input_field}
 
-        if config["framewise_labels"]:      # Use framewise labels
+        if config.get("framewise_labels"):      # Use framewise labels
             dataset = dataset.map(
                 format_for_ctc_framewiselabels,
                 fn_kwargs=format_kwargs,
@@ -170,7 +226,7 @@ def prepare_dataset_ctc(config: Dict[str, Any]) -> Dict[str, Any]:
             if remove_columns:
                 dataset[split] = dataset[split].remove_columns(remove_columns)
 
-        print(f"Saving processed dataset to {dataset_path}...")
+        print(f"Saving processed dataset to: {dataset_path}")
         dataset.save_to_disk(str(dataset_path))
 
     return dataset
@@ -288,12 +344,12 @@ if __name__ == "__main__":
     input_feature_dim = len(sample_feature[0])
     print(f"CTC input feature dimension: {input_feature_dim}")
 
-    if config["framewise_labels"]:
+    if config.get("framewise_labels"):
         print("Using frame-level phoneme labels for training.")
         model = FrameLevelPhonemeModel(input_dim=input_feature_dim, output_dim=vocab_size)
         compute_metrics_fn = compute_metrics_frame_level
     else:
-        print("Using phoneme sequence labels for CTC training.")
+        print("Using phoneme sequence labels for CTC training. (standard setup)")
         model = LinearCTCModel(input_dim=input_feature_dim, output_dim=vocab_size)
         compute_metrics_fn = compute_metrics
 

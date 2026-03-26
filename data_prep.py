@@ -183,7 +183,7 @@ def extract_framewise_binfeatures(batch: Dict) -> Dict:
     return batch
 
 
-def compute_inputs(batch: Dict, feature_extractor: Wav2Vec2FeatureExtractor) -> Dict:
+def prepare_audio_samples(batch: Dict, feature_extractor: Wav2Vec2FeatureExtractor) -> Dict:
     """Prepare raw audio samples for wav2vec2 input features using feature extractor. This will standardize (0-mean) the data."""
     audio_arrays = [item["array"] for item in batch["audio"]]       # Length batch size
     extractor_outputs = feature_extractor(
@@ -232,7 +232,47 @@ def compute_wav2vec2_hidden_states(
         truncated = hidden_states[idx, :seq_len].numpy().astype(np.float32)
         features.append(truncated.tolist())
 
-    batch["wav2vec2_features"] = features
+    batch["w2v2_features"] = features
+    return batch
+
+
+def compute_concept_logits(
+    batch: Dict,
+    feature_extractor: Wav2Vec2FeatureExtractor,
+    concept_model: torch.nn.Module,
+    device: torch.device,
+) -> Dict:
+    """Attach frame-level concept logits from a trained concept model to a dataset batch."""
+    audio_arrays = [item["array"] for item in batch["audio"]]
+    extractor_outputs = feature_extractor(
+        audio_arrays,
+        sampling_rate=TARGET_SAMPLING_RATE,
+        padding=True,
+        return_attention_mask=True,
+        return_tensors="pt",
+    )
+
+    input_values = extractor_outputs["input_values"].to(device)
+    attention_mask = extractor_outputs["attention_mask"].to(device)
+
+    with torch.no_grad():
+        outputs = concept_model(
+            input_values=input_values,
+            attention_mask=attention_mask,
+            return_dict=True,
+        )
+
+    concept_logits = outputs.logits.cpu()
+    output_lengths = concept_model.wav2vec2._get_feat_extract_output_lengths(  # type: ignore[attr-defined]
+        attention_mask.sum(dim=1)
+    ).to(torch.long)
+
+    features: List[List[List[float]]] = []
+    for idx, seq_len in enumerate(output_lengths.tolist()):
+        truncated = concept_logits[idx, :seq_len].numpy().astype(np.float32)
+        features.append(truncated.tolist())
+
+    batch["concept_logits"] = features
     return batch
 
 
@@ -279,7 +319,7 @@ def format_for_ctc(batch: Dict, input_field: str = "labels") -> Dict:
 
 
 def format_for_ctc_framewiselabels(batch: Dict, input_field: str = "labels") -> Dict:
-    """Format batch for CTC using frame-level phoneme sequence as labels, rather than ground truth (shorter) phoneme labels. (used for testing)"""
+    """Format batch for CTC using frame-level phoneme sequence as labels, rather than ground truth (shorter) phoneme labels. (Used as a test benchmark.)"""
     return {
         "input_values": _ensure_serializable_inputs(batch[input_field]),
         "labels": binary_features_to_phoneme_sequence(batch["labels"])

@@ -23,6 +23,14 @@ from jiwer import wer
 from features_config.features import phoneme_mapping
 
 
+"""
+This script is adapted from: https://huggingface.co/blog/fine-tune-wav2vec2-english
+The HF scrip applies fine-tuning and calculates the WER; for my purpose, I want to disable fine-tuning and calculate PER instead.
+
+The code does not seem to work; I get a PER of 1.0 on the test set. This is a problem with the HF script, not my adapatation.
+"""
+
+
 @dataclass
 class DataCollatorCTCWithPadding:
     processor: Wav2Vec2Processor

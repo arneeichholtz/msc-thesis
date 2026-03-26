@@ -16,4 +16,4 @@ export HF_HOME="/projects/0/prjs1921/thesis-speech/.cache/huggingface"
 export XDG_CACHE_HOME="/projects/0/prjs1921/thesis-speech/.cache"
 
 source activate thesis-cbm
-srun python train.py
+srun python train_concept_layer.py
