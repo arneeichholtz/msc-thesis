@@ -139,7 +139,7 @@ def reduce_phoneme(raw_phoneme: str) -> str:
 
 
 def extract_framewise_binfeatures(batch: Dict) -> Dict:
-    """Frame-align articulatory feature vectors for a single TIMIT example."""
+    """Extract framewise binary concept labels (phonetic features) for a batch of TIMIT samples."""
     audio = batch["audio"]
     waveform = np.asarray(audio["array"], dtype=np.float32)         # E.g. shaped: (50434,)
     sampling_rate = audio["sampling_rate"]

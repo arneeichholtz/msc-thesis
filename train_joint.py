@@ -184,8 +184,13 @@ def _get_task_label_ids(label_ids):
 
 def compute_metrics(pred) -> Dict[str, float]:
     """Calculate phoneme error rate (PER) for CTC predictions."""
-    logits = pred.predictions
+    logits = pred.predictions       # Logits is a tuple of length 3, with shapes 0: (462, 389, 40), 1: (462, 389, 29), 2: (15,)
+    if isinstance(logits, tuple):
+        logits = logits[0]
     label_ids = _get_task_label_ids(pred.label_ids)
+
+    print(type(logits))
+    print(len(logits))
 
     pred_ids = np.argmax(logits, axis=-1)
     print(f"Percentage of blanks predicted: {(pred_ids == 0).mean():.2%}")
@@ -224,6 +229,9 @@ def unfreeze_encoder_layers(model, layer_indices: List[int]) -> None:
     if layer_indices is None:
         return
 
+    for layer_idx in layer_indices:
+        assert 0 <= layer_idx < len(model.wav2vec2.encoder.layers), f"Layer index {layer_idx} is out of bounds for wav2vec2 encoder layers."
+
     encoder_layers = model.wav2vec2.encoder.layers
 
     for layer_idx in layer_indices:
@@ -248,20 +256,18 @@ if __name__ == "__main__":
     model = Wav2Vec2ForJointBottleneck.from_pretrained(     # Use from_pretrained so trained weights are used
         model_checkpoint,
         num_concepts=BINARY_FEATURE_DIM,
-        vocab_size=vocab_size,
-        joint_lambda=config.get("joint_lambda", 1.0),
+        phoneme_vocab_size=vocab_size,
+        joint_lambda=config["joint_lambda"],
         use_safetensors=True
     )
 
     initial_unfreeze = config.get("use_initial_unfreeze", False)
     if initial_unfreeze:
-        unfreeze_layers = config.get("unfreeze_layers")
-        for layer_idx in unfreeze_layers:
-            assert 0 <= layer_idx < len(model.wav2vec2.encoder.layers), f"Layer index {layer_idx} is out of bounds for wav2vec2 encoder layers."
-        unfreeze_encoder_layers(model, unfreeze_layers)
-        print(f"Wav2Vec2 encoder layers included for fine-tuning: {unfreeze_layers}.")
+        unfreeze_layer_indices = config["unfreeze_layers"]
+        unfreeze_encoder_layers(model, unfreeze_layer_indices)
+        print(f"Wav2Vec2 encoder layer indices included for fine-tuning: {unfreeze_layer_indices}.")
     else:
-        print("Using Default: keeping all wav2vec2 encoder layers frozen at the start of training.")
+        print("Using default: keeping all wav2vec2 encoder layers frozen at the start of training.")
 
     load_dotenv()
     api_key = os.getenv("WANDB_API_KEY")
@@ -270,11 +276,11 @@ if __name__ == "__main__":
     wandb_run = wandb.init(
         project=config["wandb_project"],
         name=config["run_name"],
-        config=config,
+        config=config
     )
 
     training_args = TrainingArguments(
-        output_dir=config.get("output_dir_joint", config["output_dir"]),
+        output_dir=config["output_dir_joint"],
         eval_strategy=config["eval_strategy"],
         learning_rate=config["learning_rate"],
         per_device_train_batch_size=config["per_device_train_batch_size"],
@@ -286,7 +292,8 @@ if __name__ == "__main__":
         warmup_steps=config["warmup_steps"],
         save_total_limit=config["save_total_limit"],
         fp16=config["use_fp16"],
-        report_to="wandb",
+        label_names=["concept_labels", "task_labels"],
+        report_to="wandb"
     )
 
     data_collator = JointDataCollator(concept_label_dim=BINARY_FEATURE_DIM)
@@ -298,8 +305,7 @@ if __name__ == "__main__":
         eval_dataset=dataset[eval_split],
         data_collator=data_collator,
         tokenizer=feature_extractor,
-        compute_metrics=compute_metrics,
-        label_names=["concept_labels", "task_labels"],
+        compute_metrics=compute_metrics
     )
 
     trainer.train()

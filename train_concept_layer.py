@@ -283,7 +283,7 @@ if __name__ == "__main__":
     )
 
     training_args = TrainingArguments(
-        output_dir=config["output_dir"],
+        output_dir=config["output_dir_concept_layer"],
         eval_strategy=config["eval_strategy"],
         learning_rate=config["learning_rate"],
         per_device_train_batch_size=config["per_device_train_batch_size"],

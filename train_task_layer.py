@@ -144,13 +144,7 @@ def prepare_dataset_tl(config: Dict[str, Any]) -> Dict[str, Any]:
         input_field = _get_input_field(config)
 
         if input_field == "concept_logits":
-            concept_checkpoint_folder = config.get("concept_checkpoint_folder")
-            
-            if concept_checkpoint_folder is None:
-                raise ValueError(
-                    "tl_input_representation='concept_logits' requires 'concept_checkpoint_folder' "
-                    "pointing to a trained checkpoint from train.py"
-                )
+            concept_checkpoint_folder = config["output_dir_concept_layer"]
 
             if os.path.isdir(concept_checkpoint_folder):
                 concept_checkpoint = get_last_checkpoint(concept_checkpoint_folder)
@@ -158,7 +152,7 @@ def prepare_dataset_tl(config: Dict[str, Any]) -> Dict[str, Any]:
             feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(config.get("model_checkpoint"))
             concept_model = Wav2Vec2ForArticulatoryFeatures.from_pretrained(
                 concept_checkpoint,
-                num_labels=BINARY_FEATURE_DIM,
+                num_labels=BINARY_FEATURE_DIM
             )
             concept_model.eval()
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -354,7 +348,7 @@ if __name__ == "__main__":
     )
     
     training_args = TrainingArguments(
-        output_dir=config["output_dir"],
+        output_dir=config["output_dir_task_layer"],
         eval_strategy=config["eval_strategy"],
         learning_rate=config["learning_rate"],
         per_device_train_batch_size=config["per_device_train_batch_size"],
