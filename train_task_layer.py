@@ -226,6 +226,98 @@ def prepare_dataset_tl(config: Dict[str, Any]) -> Dict[str, Any]:
     return dataset
 
 
+def _get_concept_checkpoint(config: Dict[str, Any]) -> str:
+    concept_checkpoint_folder = config["output_dir_concept_layer"]
+    if os.path.isdir(concept_checkpoint_folder):
+        concept_checkpoint = get_last_checkpoint(concept_checkpoint_folder)
+        if concept_checkpoint:
+            return concept_checkpoint
+    raise FileNotFoundError(
+        "No concept model checkpoint found in output_dir_concept_layer."
+    )
+
+
+def prepare_test_dataset_with_concept_logits(config: Dict[str, Any]):
+    dataset_path = config.get("processed_dataset_path_tl")
+    dataset_path = Path(dataset_path)
+    dataset_path = dataset_path.with_name(dataset_path.stem + "-test-concept_logits")
+
+    if config.get("framewise_labels"):
+        dataset_path = dataset_path.with_name(dataset_path.stem + "-framewise_labels")
+
+    os.makedirs(dataset_path.parent, exist_ok=True)
+
+    if config.get("load_processed_dataset") and dataset_path.exists():
+        print(f"Loading test concept logits dataset from: {dataset_path}")
+        test_dataset = load_from_disk(str(dataset_path))
+        return test_dataset
+
+    print("Building test dataset with concept logits from concept model...")
+    dataset = load_timit_dataset(
+        config["sample_validation_set"],
+        config.get("sample_validation_size", 0.10),
+    )
+
+    dataset = dataset.map(
+        extract_framewise_binfeatures,
+        desc="Extracting binary articulatory features for frames",
+        load_from_cache_file=False,
+    )
+
+    concept_checkpoint = _get_concept_checkpoint(config)
+    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(config.get("model_checkpoint"))
+    concept_model = Wav2Vec2ForArticulatoryFeatures.from_pretrained(
+        concept_checkpoint,
+        num_labels=BINARY_FEATURE_DIM,
+    )
+    concept_model.eval()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    concept_model.to(device)
+
+    batch_size = config.get("concept_logits_batch_size", 4)
+    dataset = dataset.map(
+        compute_concept_logits,
+        batched=True,
+        batch_size=batch_size,
+        fn_kwargs={
+            "feature_extractor": feature_extractor,
+            "concept_model": concept_model,
+            "device": device,
+        },
+        desc="Extracting concept logits from trained concept model",
+        load_from_cache_file=False,
+    )
+    concept_model.to("cpu")
+
+    format_kwargs = {"input_field": "concept_logits"}
+    if config.get("framewise_labels"):
+        dataset = dataset.map(
+            format_for_ctc_framewiselabels,
+            fn_kwargs=format_kwargs,
+            desc="Formatting for CTC using framewise labels",
+            load_from_cache_file=False,
+        )
+    else:
+        dataset = dataset.map(
+            format_for_ctc,
+            fn_kwargs=format_kwargs,
+            desc="Formatting for CTC",
+            load_from_cache_file=False,
+        )
+
+    keep_columns = {"input_values", "labels"}
+    for split in dataset.keys():
+        remove_columns = [
+            column for column in dataset[split].column_names if column not in keep_columns
+        ]
+        if remove_columns:
+            dataset[split] = dataset[split].remove_columns(remove_columns)
+
+    print(f"Saving test concept logits dataset to: {dataset_path}")
+    dataset.save_to_disk(str(dataset_path))
+    return dataset
+
+
 def _collapse_ctc_predictions(sequence: np.ndarray, blank_id: int = 0) -> List[int]:
     """Remove blank tokens and repeated predictions for a single sequence."""
     collapsed: List[int] = []
@@ -378,6 +470,17 @@ if __name__ == "__main__":
 
     test_results = trainer.predict(dataset["test"])
     print(test_results.metrics)
+
+    # test_dataset = dataset["test"]
+    # use_concept_logits_for_test = (
+    #     config["tl_input_representation"] == "binary_concepts" and config["use_concept_logits_for_test"] == True
+    # )
+
+    # if use_concept_logits_for_test:
+    #     test_dataset = prepare_test_dataset_with_concept_logits(config)["test"]
+
+    # test_results = trainer.predict(test_dataset)
+    # print(test_results.metrics)
 
     # print_per_feature_statistics(test_results)
 

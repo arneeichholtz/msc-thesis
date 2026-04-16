@@ -5,15 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
+import math
 import os
 
 import numpy as np
 import torch
+from torch import nn
 import wandb
 import yaml
 from dotenv import load_dotenv
 from datasets import load_from_disk
 from jiwer import wer
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from transformers import Trainer, TrainingArguments, Wav2Vec2FeatureExtractor
 
 from data_prep import (
@@ -25,6 +28,7 @@ from data_prep import (
     format_for_joint,
 )
 from model import Wav2Vec2ForJointBottleneck
+from utils import LambdaSchedulerCallback, JointTrainer
 
 CONFIG_PATH = Path("config.yml")
 
@@ -224,6 +228,82 @@ def compute_metrics(pred) -> Dict[str, float]:
     return {"phoneme_error_rate": float(phoneme_error_rate)}
 
 
+def compute_concept_metrics(logits: np.ndarray, labels: np.ndarray) -> Dict[str, float]:
+    logits_flat = logits.reshape(-1, logits.shape[-1])
+    labels_flat = labels.reshape(-1, labels.shape[-1]).astype(np.int32)
+
+    valid_mask = (labels_flat != -100).all(axis=1)
+    logits_flat = logits_flat[valid_mask]
+    labels_flat = labels_flat[valid_mask]
+
+    probs = 1 / (1 + np.exp(-logits_flat))
+    predictions = (probs > 0.5).astype(np.int32)
+
+    macro_f1 = f1_score(labels_flat, predictions, average="macro", zero_division=0)
+    micro_f1 = f1_score(labels_flat, predictions, average="micro", zero_division=0)
+    macro_precision = precision_score(labels_flat, predictions, average="macro", zero_division=0)
+    macro_recall = recall_score(labels_flat, predictions, average="macro", zero_division=0)
+    vect_accuracy = accuracy_score(labels_flat, predictions)
+    element_wise_acc = (predictions == labels_flat).mean()
+
+    return {
+        "concept_macro_f1": float(macro_f1),
+        "concept_micro_f1": float(micro_f1),
+        "concept_macro_precision": float(macro_precision),
+        "concept_macro_recall": float(macro_recall),
+        "concept_vect_accuracy": float(vect_accuracy),
+        "concept_element_wise_accuracy": float(element_wise_acc),
+    }
+
+
+def evaluate_concept_layer(model: torch.nn.Module, dataset, data_collator, batch_size: int, device: torch.device,) -> Dict[str, float]:
+    model.eval()
+
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        collate_fn=data_collator,
+    )
+
+    all_logits = []
+    all_labels = []
+
+    for batch in dataloader:
+        input_values = batch["input_values"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
+        concept_labels = batch["concept_labels"].to(device)
+
+        with torch.no_grad():
+            outputs = model(
+                input_values=input_values,
+                attention_mask=attention_mask,
+                concept_labels=concept_labels,
+                task_labels=None,
+                return_dict=True,
+            )
+
+        concept_logits = outputs["concept_logits"]
+        time_dim = concept_logits.size(1)
+        label_time_dim = concept_labels.size(1)
+        usable_length = min(time_dim, label_time_dim)
+
+        concept_logits = concept_logits[:, :usable_length, :]
+        concept_labels = concept_labels[:, :usable_length, :]
+
+        concept_logits_np = concept_logits.cpu().numpy()
+        concept_labels_np = concept_labels.cpu().numpy()
+
+        all_logits.append(concept_logits_np.reshape(-1, concept_logits_np.shape[-1]))
+        all_labels.append(concept_labels_np.reshape(-1, concept_labels_np.shape[-1]))
+
+    if not all_logits:
+        return {}
+
+    logits = np.concatenate(all_logits, axis=0)
+    labels = np.concatenate(all_labels, axis=0)
+    return compute_concept_metrics(logits, labels)
+
+
 def unfreeze_encoder_layers(model, layer_indices: List[int]) -> None:
     """Unfreeze specific wav2vec2 encoder transformer layers by index."""
     if layer_indices is None:
@@ -238,10 +318,14 @@ def unfreeze_encoder_layers(model, layer_indices: List[int]) -> None:
         for param in encoder_layers[layer_idx].parameters():
             param.requires_grad = True
 
+            
 
 if __name__ == "__main__":
     
     config = load_training_config()
+    print("Training configuration:")
+    for key, value in config.items():
+        print(f"  {key}: {value}")
 
     model_checkpoint = config["model_checkpoint"]
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_checkpoint)
@@ -290,27 +374,57 @@ if __name__ == "__main__":
         save_steps=config["save_steps"],
         eval_steps=config["eval_steps"],
         warmup_steps=config["warmup_steps"],
-        save_total_limit=config["save_total_limit"],
+        # save_total_limit=config["save_total_limit"],
+        save_strategy=config["save_strategy"],
         fp16=config["use_fp16"],
         label_names=["concept_labels", "task_labels"],
-        report_to="wandb"
+        report_to="wandb",
+        dataloader_num_workers=0        # to fix the snellius pauses/stops
     )
 
     data_collator = JointDataCollator(concept_label_dim=BINARY_FEATURE_DIM)
+    callbacks = []
+    
+    if config.get("use_lambda_callback", False):
+        # Calculate max steps for the scheduler
+        num_update_steps_per_epoch = len(dataset["train"]) // training_args.per_device_train_batch_size
+        max_steps = math.ceil(training_args.num_train_epochs * num_update_steps_per_epoch)
 
+        lambda_scheduler = LambdaSchedulerCallback(
+            initial_lambda=config["initial_lambda"],
+            final_lambda=config["final_lambda"],
+            max_steps=max_steps,
+            schedule=config["schedule"]
+        )
+        callbacks.append(lambda_scheduler)
+    
     trainer = Trainer(
+    # trainer = JointTrainer(
         model=model,
         args=training_args,
         train_dataset=dataset["train"],
         eval_dataset=dataset[eval_split],
         data_collator=data_collator,
         tokenizer=feature_extractor,
-        compute_metrics=compute_metrics
+        compute_metrics=compute_metrics,
+        callbacks=callbacks
     )
 
     trainer.train()
 
     test_results = trainer.predict(dataset["test"])
     print(test_results.metrics)
+
+    # concept_metrics = evaluate_concept_layer(
+    #     model=model,
+    #     dataset=dataset["test"],
+    #     data_collator=data_collator,
+    #     batch_size=training_args.per_device_eval_batch_size,
+    #     device=trainer.args.device
+    # )
+
+    # if concept_metrics:
+    #     print(concept_metrics)
+    #     wandb.log(concept_metrics)
 
     wandb_run.finish()

@@ -184,7 +184,8 @@ def extract_framewise_binfeatures(batch: Dict) -> Dict:
 
 
 def prepare_audio_samples(batch: Dict, feature_extractor: Wav2Vec2FeatureExtractor) -> Dict:
-    """Prepare raw audio samples for wav2vec2 input features using feature extractor. This will standardize (0-mean) the data."""
+    """Prepare raw audio samples for wav2vec2 input features using feature extractor. This will standardize (0-mean) the data.
+       Raw audio file is not divided into frames, this happens during the model forward pass. Shape of input_values is (batch, seq length), like (32, 57404)"""
     audio_arrays = [item["array"] for item in batch["audio"]]       # Length batch size
     extractor_outputs = feature_extractor(
         audio_arrays,
@@ -276,11 +277,13 @@ def compute_concept_logits(
     return batch
 
 
-def load_timit_dataset(sample_validation_set: bool = True, sample_validation_size: float = 0.1) -> DatasetDict | IterableDatasetDict:
-    """Load the TIMIT ASR dataset, sample validation set and resample at 16 kHz."""
+def load_timit_dataset(sample_validation_set: bool = True, sample_validation_size: float | None = 0.1,) -> DatasetDict | IterableDatasetDict:
+    """Load TIMIT, resample to 16 kHz, and optionally create a validation split from train."""
     dataset = load_dataset("timit_asr")
     dataset = dataset.cast_column("audio", Audio(sampling_rate=TARGET_SAMPLING_RATE))
     if sample_validation_set:
+        if sample_validation_size is None:
+            raise ValueError("sample_validation_size cannot be None when sample_validation_set=True")
         train_val_split = dataset["train"].train_test_split(test_size=sample_validation_size, seed=42)
         dataset = DatasetDict({
             "train": train_val_split["train"],

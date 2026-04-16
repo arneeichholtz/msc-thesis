@@ -1,0 +1,30 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu_h100
+#SBATCH --gpus=1
+#SBATCH --job-name=run_probe
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=9
+#SBATCH --time=00:10:00
+#SBATCH --output=outputs/run_probe_%A.out
+
+module purge
+module load 2023
+module load Anaconda3/2023.07-2
+
+# export HF_HOME="/projects/0/prjs1921/thesis-speech/.cache/huggingface"     
+# export XDG_CACHE_HOME="/projects/0/prjs1921/thesis-speech/.cache"    
+
+# Restrict PyTorch and OpenBLAS CPU threading to allocated SLURM cpus
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export TOKENIZERS_PARALLELISM=false
+
+# Use node-local temporary storage to prevent network file-locking deadlocks
+export HF_HOME="$TMPDIR/.cache/huggingface"
+export XDG_CACHE_HOME="$TMPDIR/.cache"
+export HF_DATASETS_CACHE="$TMPDIR/.cache/huggingface/datasets"
+
+source activate thesis-cbm
+srun python probe.py

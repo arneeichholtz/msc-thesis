@@ -195,7 +195,7 @@ def print_per_feature_statistics(test_results):
     print(per_feature_acc_dict)
 
 def prepare_dataset_cl(config, feature_extractor):
-    dataset_path = config.get("processed_dataset_path_cl", "./datasets/processed_timit_dataset-")
+    dataset_path = config.get("processed_dataset_path_cl", "./datasets/processed_timit_dataset-conceptlayer")
     os.makedirs(Path(dataset_path).parent, exist_ok=True)
     
     if config["load_processed_dataset"] and Path(dataset_path).exists():
@@ -232,6 +232,8 @@ def prepare_dataset_cl(config, feature_extractor):
             
         print(f"Saving processed dataset to: {dataset_path}")
         dataset.save_to_disk(dataset_path)
+
+        
     
     return dataset
 
@@ -255,6 +257,8 @@ def initialize_model(config):
         print(f"Wav2Vec2 encoder layers included for fine-tuning: {unfreeze_layers}.")
     else:
         print("Using Default: keeping all wav2vec2 encoder layers frozen at the start of training.")
+
+    return model
 
 
 
