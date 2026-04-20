@@ -18,7 +18,7 @@ output_dir_task_layer: /projects/0/prjs1921/thesis-speech/model_checkpoints/wav2
 output_dir_joint: /projects/0/prjs1921/thesis-speech/model_checkpoints/wav2vec2-joint
 
 eval_strategy: steps
-learning_rate: 0.001
+learning_rate: 0.0001
 per_device_train_batch_size: 32
 per_device_eval_batch_size: 32
 num_train_epochs: 20
@@ -32,15 +32,17 @@ use_fp16: True
 sample_validation_set: True
 sample_validation_size: 0.10
 
-joint_lambda: 10
+joint_lambda: 1
 
 use_lambda_callback: False
 initial_lambda: 50
 final_lambda: 1
 schedule: linear   # Options: linear, exponential, step
 
+joint_concept_metrics: False     # Calculate concept metrics for joint bottleneck optimization
+
 use_initial_unfreeze: True      # If True, unfreeze specified wav2vec2 encoder layers from the start of training
 unfreeze_layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]           # List of wav2vec2 encoder layer indices to unfreeze from the start of training (e.g., [8, 9, 10, 11] to unfreeze the last 4 layers)  
 
 wandb_project: thesis-cbm       # WandB project name for logging training runs
-run_name: wav2vec2-joint-gradnorm
+run_name: wav2vec2-joint-baseline-ft-lr0.0001

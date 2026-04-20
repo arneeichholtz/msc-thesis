@@ -5,17 +5,16 @@ sample_validation_set: False
 
 # Model settings
 model_checkpoint: facebook/wav2vec2-base
-per_device_train_batch_size: 32
 
 # Probe optimization settings
-epochs: 2
-lr: 0.001
+epochs: 10
+lr: 0.0001
 weight_decay: 0.0
 batch_size: 32
 seed: 42
 
 # Optional: fine-tune preceding wav2vec2 transformer layers for each probed layer
-fine_tune_preceding_layers: False
+fine_tune_preceding_layers: True
 
 num_workers: 0
-output_json: outputs/probe_results_ft.json
+output_json: outputs/probe_results_test.json

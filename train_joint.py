@@ -28,7 +28,7 @@ from data_prep import (
     format_for_joint,
 )
 from model import Wav2Vec2ForJointBottleneck
-from utils import LambdaSchedulerCallback, JointTrainer
+from utils import LambdaSchedulerCallback
 
 CONFIG_PATH = Path("config.yml")
 
@@ -399,7 +399,6 @@ if __name__ == "__main__":
         callbacks.append(lambda_scheduler)
     
     trainer = Trainer(
-    # trainer = JointTrainer(
         model=model,
         args=training_args,
         train_dataset=dataset["train"],
@@ -415,16 +414,16 @@ if __name__ == "__main__":
     test_results = trainer.predict(dataset["test"])
     print(test_results.metrics)
 
-    # concept_metrics = evaluate_concept_layer(
-    #     model=model,
-    #     dataset=dataset["test"],
-    #     data_collator=data_collator,
-    #     batch_size=training_args.per_device_eval_batch_size,
-    #     device=trainer.args.device
-    # )
+    if config["joint_concept_metrics"]:
+        concept_metrics = evaluate_concept_layer(
+            model=model,
+            dataset=dataset["test"],
+            data_collator=data_collator,
+            batch_size=training_args.per_device_eval_batch_size,
+            device=trainer.args.device
+        )
 
-    # if concept_metrics:
-    #     print(concept_metrics)
-    #     wandb.log(concept_metrics)
+        print(concept_metrics)
+        wandb.log(concept_metrics)
 
     wandb_run.finish()

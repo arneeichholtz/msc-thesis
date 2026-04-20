@@ -133,13 +133,14 @@ def compute_metrics(eval_pred):
 
 def print_dataset_statistics(dataset: DatasetDict):
     """Calculates and prints the distribution of binary features in the dataset."""
-    # feature_labels = [label for group in FEATURE_GROUPS_LABELS for label in group.labels]
-    feature_labels = [f"{group.name}_{label}" for group in FEATURE_GROUPS_LABELS for label in group.labels]
+    feature_labels = [label for group in FEATURE_GROUPS_LABELS for label in group.labels]
     print("feature labels: ", feature_labels)
     
     print("\n" + "="*80)
     print("DATASET FEATURE DISTRIBUTION")
     print("="*80)
+
+    total_feature_counts = np.zeros(BINARY_FEATURE_DIM, dtype=np.int64)
 
     for split in dataset.keys():
         print(f"\n--- Split: {split} ---")
@@ -156,6 +157,12 @@ def print_dataset_statistics(dataset: DatasetDict):
 
         split_counts = {label: int(feature_counts[i]) for i, label in enumerate(feature_labels)}
         print(split_counts)
+
+        total_feature_counts += feature_counts
+
+    total_counts = {label: int(total_feature_counts[i]) for i, label in enumerate(feature_labels)}
+    print("\n--- Split: all ---")
+    print(total_counts)
             
     print("="*80 + "\n")
 
@@ -276,50 +283,52 @@ if __name__ == "__main__":
     eval_split = "validation" if "validation" in dataset else "test"
     print(f"Evaluation split: {eval_split}")
 
-    load_dotenv()
-    api_key = os.getenv("WANDB_API_KEY")
-    wandb.login(key=api_key)
+    print_dataset_statistics(dataset)
+
+    # load_dotenv()
+    # api_key = os.getenv("WANDB_API_KEY")
+    # wandb.login(key=api_key)
     
-    wandb_run = wandb.init(
-        project=config["wandb_project"],
-        name=config["run_name"],
-        config=config,
-    )
+    # wandb_run = wandb.init(
+    #     project=config["wandb_project"],
+    #     name=config["run_name"],
+    #     config=config,
+    # )
 
-    training_args = TrainingArguments(
-        output_dir=config["output_dir_concept_layer"],
-        eval_strategy=config["eval_strategy"],
-        learning_rate=config["learning_rate"],
-        per_device_train_batch_size=config["per_device_train_batch_size"],
-        per_device_eval_batch_size=config["per_device_eval_batch_size"],
-        num_train_epochs=config["num_train_epochs"],
-        logging_steps=config["logging_steps"],
-        save_steps=config["save_steps"],
-        eval_steps=config["eval_steps"],
-        warmup_steps=config["warmup_steps"],
-        save_total_limit=config["save_total_limit"],
-        fp16=config["use_fp16"],
-        report_to="wandb"
-    )
+    # training_args = TrainingArguments(
+    #     output_dir=config["output_dir_concept_layer"],
+    #     eval_strategy=config["eval_strategy"],
+    #     learning_rate=config["learning_rate"],
+    #     per_device_train_batch_size=config["per_device_train_batch_size"],
+    #     per_device_eval_batch_size=config["per_device_eval_batch_size"],
+    #     num_train_epochs=config["num_train_epochs"],
+    #     logging_steps=config["logging_steps"],
+    #     save_steps=config["save_steps"],
+    #     eval_steps=config["eval_steps"],
+    #     warmup_steps=config["warmup_steps"],
+    #     save_total_limit=config["save_total_limit"],
+    #     fp16=config["use_fp16"],
+    #     report_to="wandb"
+    # )
 
-    num_labels = BINARY_FEATURE_DIM
-    data_collator = ArticulatoryFeatureDataCollator(label_dim=num_labels)
+    # num_labels = BINARY_FEATURE_DIM
+    # data_collator = ArticulatoryFeatureDataCollator(label_dim=num_labels)
 
-    trainer = Trainer(      # Trainer handles device placement
-        model=model,
-        args=training_args,
-        train_dataset=dataset["train"],
-        eval_dataset=dataset[eval_split],
-        data_collator=data_collator,
-        tokenizer=feature_extractor,
-        compute_metrics=compute_metrics
-    )
+    # trainer = Trainer(      # Trainer handles device placement
+    #     model=model,
+    #     args=training_args,
+    #     train_dataset=dataset["train"],
+    #     eval_dataset=dataset[eval_split],
+    #     data_collator=data_collator,
+    #     tokenizer=feature_extractor,
+    #     compute_metrics=compute_metrics
+    # )
 
-    trainer.train()
+    # trainer.train()
 
-    test_results = trainer.predict(dataset["test"])
-    print(test_results.metrics)
+    # test_results = trainer.predict(dataset["test"])
+    # print(test_results.metrics)
 
-    # print_per_feature_statistics(test_results)
+    # # print_per_feature_statistics(test_results)
 
-    wandb_run.finish()
+    # wandb_run.finish()

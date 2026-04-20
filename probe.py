@@ -337,6 +337,9 @@ def train_and_evaluate_finetuned_probe(
 
     optimizer = AdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
 
+    wav2vec2_model.train()
+    probe.train()
+
     for epoch in range(epochs):
         running_loss = 0.0
         steps = 0
@@ -479,6 +482,11 @@ if __name__ == "__main__":
 
     cli_args = parse_cli_args()
     probe_config = load_probe_config(cli_args.probe_config)
+
+    print(f"Loaded CLI args: {cli_args}")
+    for key, value in probe_config.items():
+        print(f"  {key}: {value}")
+
     set_seed(int(probe_config.get("seed", 42)))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
