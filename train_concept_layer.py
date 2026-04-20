@@ -131,9 +131,12 @@ def compute_metrics(eval_pred):
         "element_wise_accuracy": element_wise_acc
     }
 
+
 def print_dataset_statistics(dataset: DatasetDict):
     """Calculates and prints the distribution of binary features in the dataset."""
     feature_labels = [label for group in FEATURE_GROUPS_LABELS for label in group.labels]
+    # feature_labels = [f"{group.name}_{label}" for group in FEATURE_GROUPS_LABELS for label in group.labels]
+
     print("feature labels: ", feature_labels)
     
     print("\n" + "="*80)
@@ -165,6 +168,7 @@ def print_dataset_statistics(dataset: DatasetDict):
     print(total_counts)
             
     print("="*80 + "\n")
+
 
 def print_per_feature_statistics(test_results):
     # Calculate per-feature accuracy
@@ -200,6 +204,7 @@ def print_per_feature_statistics(test_results):
 
     per_feature_acc_dict = {f"{feature_labels[i]}": float(per_feature_accuracy[i]) for i in range(len(feature_labels))}
     print(per_feature_acc_dict)
+
 
 def prepare_dataset_cl(config, feature_extractor):
     dataset_path = config.get("processed_dataset_path_cl", "./datasets/processed_timit_dataset-conceptlayer")
@@ -278,7 +283,7 @@ if __name__ == "__main__":
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_checkpoint)
     
     dataset = prepare_dataset_cl(config, feature_extractor)
-    model = initialize_model(config)
+    # model = initialize_model(config)
 
     eval_split = "validation" if "validation" in dataset else "test"
     print(f"Evaluation split: {eval_split}")
