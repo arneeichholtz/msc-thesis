@@ -3,6 +3,9 @@
 from transformers import TrainerCallback, Trainer
 import math
 import wandb
+from gradnorm_pytorch import GradNormLossWeighter
+import torch
+from typing import Dict
 
 class LambdaSchedulerCallback(TrainerCallback):
     """Schedules the joint_lambda parameter during training."""
@@ -40,6 +43,37 @@ class LambdaSchedulerCallback(TrainerCallback):
 
 
 
+class GradNormTrainer(Trainer):
+    def __init__(self, *args, gradnorm_weighter: GradNormLossWeighter, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.gradnorm_weighter = gradnorm_weighter
+        if self.gradnorm_weighter is not None:
+            self.gradnorm_weighter.accelerator = self.accelerator
+
+    def training_step(
+        self,
+        model: torch.nn.Module,
+        inputs: Dict[str, torch.Tensor],
+        num_items_in_batch: int | None = None,
+    ) -> torch.Tensor:
+        model.train()
+        inputs = self._prepare_inputs(inputs)
+
+        with self.compute_loss_context_manager():
+            outputs = model(**inputs)
+            task_loss = outputs.get("task_loss")
+            concept_loss = outputs.get("concept_loss")
+
+            if task_loss is None or concept_loss is None:
+                raise ValueError("GradNorm requires both task_loss and concept_loss.")
+
+        if self.args.gradient_accumulation_steps > 1:
+            scale = self.args.gradient_accumulation_steps
+            task_loss = task_loss / scale
+            concept_loss = concept_loss / scale
+
+        self.gradnorm_weighter.backward([task_loss, concept_loss])
+        return (task_loss + concept_loss).detach()
 
 
 

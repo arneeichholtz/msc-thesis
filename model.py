@@ -146,10 +146,10 @@ class Wav2Vec2ForJointBottleneck(Wav2Vec2PreTrainedModel):
     def __init__(self, config, num_concepts: int, phoneme_vocab_size: int, joint_lambda: float = 1.0):      # config associated with model checkpoint is used
         super().__init__(config)
         self.wav2vec2 = Wav2Vec2Model(config)
-        # self.concept_head = nn.Linear(config.hidden_size, num_concepts)
-        self.task_head = nn.Linear(config.hidden_size, phoneme_vocab_size)
+        self.concept_head = nn.Linear(config.hidden_size, num_concepts)
+        self.task_head = nn.Linear(num_concepts, phoneme_vocab_size)
 
-        # self.concept_loss_fn = BCEWithLogitsLoss(reduction="none")
+        self.concept_loss_fn = BCEWithLogitsLoss(reduction="none")
         self.ctc_loss_fn = nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)  
         self.joint_lambda = float(joint_lambda)
         
@@ -208,39 +208,38 @@ class Wav2Vec2ForJointBottleneck(Wav2Vec2PreTrainedModel):
         )
 
         hidden_states = outputs.last_hidden_state
-        # concept_logits = self.concept_head(hidden_states)
-
-        task_logits = self.task_head(hidden_states)     # was task_head(concept_logits)
+        concept_logits = self.concept_head(hidden_states)
+        task_logits = self.task_head(concept_logits)
 
         batch_size = input_values.size(0)
         device = input_values.device
 
         concept_loss = None
-        # if concept_labels is not None:
-        #     if concept_labels.dim() == 2:
-        #         concept_labels = concept_labels.unsqueeze(1)
+        if concept_labels is not None:
+            if concept_labels.dim() == 2:
+                concept_labels = concept_labels.unsqueeze(1)
 
-        #     time_dim = concept_logits.size(1)
-        #     label_time_dim = concept_labels.size(1)
-        #     usable_length = min(time_dim, label_time_dim)
+            time_dim = concept_logits.size(1)
+            label_time_dim = concept_labels.size(1)
+            usable_length = min(time_dim, label_time_dim)
 
-        #     effective_logits = concept_logits[:, :usable_length, :]
-        #     effective_labels = concept_labels[:, :usable_length, :]
+            effective_logits = concept_logits[:, :usable_length, :]
+            effective_labels = concept_labels[:, :usable_length, :]
 
-        #     frame_mask = self._compute_attention_mask(
-        #         attention_mask,
-        #         usable_length,
-        #         batch_size,
-        #         device,
-        #     )
-        #     frame_mask = frame_mask.unsqueeze(-1).type_as(effective_logits)
-        #     label_mask = (effective_labels != -100).type_as(effective_logits)
-        #     frame_mask = frame_mask * label_mask
+            frame_mask = self._compute_attention_mask(
+                attention_mask,
+                usable_length,
+                batch_size,
+                device,
+            )
+            frame_mask = frame_mask.unsqueeze(-1).type_as(effective_logits)
+            label_mask = (effective_labels != -100).type_as(effective_logits)
+            frame_mask = frame_mask * label_mask
 
-        #     raw_loss = self.concept_loss_fn(effective_logits, effective_labels)
-        #     masked_loss = raw_loss * frame_mask
-        #     normalizer = frame_mask.sum().clamp(min=1.0)
-        #     concept_loss = masked_loss.sum() / normalizer
+            raw_loss = self.concept_loss_fn(effective_logits, effective_labels)
+            masked_loss = raw_loss * frame_mask
+            normalizer = frame_mask.sum().clamp(min=1.0)
+            concept_loss = masked_loss.sum() / normalizer
 
         task_loss = None
         if task_labels is not None:
@@ -262,10 +261,7 @@ class Wav2Vec2ForJointBottleneck(Wav2Vec2PreTrainedModel):
                 target_lengths,
             )
 
-        loss = task_loss
-        # loss_scalar = task_loss.item() / concept_loss.item() if concept_loss is not None and task_loss is not None else 1.0
-        # loss = None
-        
+        loss = None
         if task_loss is not None and concept_loss is not None:
             loss =  task_loss + self.joint_lambda * concept_loss
         elif task_loss is not None:
@@ -276,9 +272,83 @@ class Wav2Vec2ForJointBottleneck(Wav2Vec2PreTrainedModel):
         return {
             "loss": loss,
             "logits": task_logits,
-            # "concept_logits": concept_logits,
-            # "concept_loss": concept_loss,
-            # "task_loss": task_loss,
+            "concept_logits": concept_logits,
+            "concept_loss": concept_loss,
+            "task_loss": task_loss,
+        }
+
+
+class Wav2Vec2Baseline(Wav2Vec2PreTrainedModel):
+    """Joint bottleneck model: wav2vec2 -> phoneme CTC."""
+
+    def __init__(self, config, phoneme_vocab_size: int):      # config associated with model checkpoint is used
+        super().__init__(config)
+        self.wav2vec2 = Wav2Vec2Model(config)
+        self.task_head = nn.Linear(config.hidden_size, phoneme_vocab_size)
+        self.ctc_loss_fn = nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)  
+        
+        self.wav2vec2.requires_grad_(False)         # Freeze all wav2vec2 params by default
+        self.post_init()
+
+
+    def _get_output_lengths(
+        self,
+        attention_mask: Optional[torch.Tensor],
+        time_steps: int,
+        batch_size: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        if attention_mask is None:
+            return torch.full((batch_size,), time_steps, device=device, dtype=torch.long)
+        output_lengths = self.wav2vec2._get_feat_extract_output_lengths(
+            attention_mask.sum(dim=1)
+        )
+        return output_lengths.to(device).to(torch.long).clamp(max=time_steps)
+
+
+    def forward(
+        self,
+        input_values: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        task_labels: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> dict:
+        outputs = self.wav2vec2(
+            input_values,
+            attention_mask=attention_mask,
+            output_hidden_states=kwargs.get("output_hidden_states", False),
+            return_dict=True,
+        )
+
+        hidden_states = outputs.last_hidden_state
+        logits = self.task_head(hidden_states)
+
+        batch_size = input_values.size(0)
+        device = input_values.device
+
+        loss = None
+        if task_labels is not None:
+            log_probs = F.log_softmax(logits, dim=-1)
+            ctc_log_probs = log_probs.transpose(0, 1)
+            input_lengths = self._get_output_lengths(
+                attention_mask,
+                logits.size(1),
+                batch_size,
+                device,
+            )
+            target_lengths = (task_labels != -100).long().sum(dim=1)
+            targets = task_labels[task_labels != -100]
+
+            loss = self.ctc_loss_fn(
+                ctc_log_probs,
+                targets,
+                input_lengths,
+                target_lengths,
+            )
+
+        return {
+            "loss": loss,
+            "logits": logits,
         }
     
 

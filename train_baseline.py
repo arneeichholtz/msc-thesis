@@ -10,16 +10,12 @@ import os
 
 import numpy as np
 import torch
-from torch import nn
 import wandb
 import yaml
 from dotenv import load_dotenv
 from datasets import load_from_disk
 from jiwer import wer
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from transformers import Trainer, TrainingArguments, Wav2Vec2FeatureExtractor
-from gradnorm_pytorch import GradNormLossWeighter
-# from transformers import TrainerCallback, TrainerControl, TrainerState
 
 from data_prep import (
     BINARY_FEATURE_DIM,
@@ -27,11 +23,11 @@ from data_prep import (
     extract_framewise_binfeatures,
     prepare_audio_samples,
     phoneme_token_to_id,
-    format_for_joint,
+    format_for_baselines
 )
-from model import Wav2Vec2ForJointBottleneck
-from utils.utils import LambdaSchedulerCallback, GradNormTrainer
-from utils.concept_utils import evaluate_concept_layer
+
+from model import Wav2Vec2Baseline
+# from utils.utils import LambdaSchedulerCallback
 
 CONFIG_PATH = Path("config.yml")
 
@@ -41,8 +37,8 @@ ID_TO_PHONEME = {idx: token for token, idx in PHONEME_TOKEN_TO_ID.items()}
 
 
 @dataclass
-class JointDataCollator:
-    """Pad audio inputs, concept labels, and task labels for joint training."""
+class BaselineDataCollator:
+    """Pad audio inputs and task labels for joint training."""
 
     concept_label_dim: int
     input_padding_value: float = 0.0
@@ -51,7 +47,7 @@ class JointDataCollator:
     def __call__(self, features: List[Dict]) -> Dict[str, torch.Tensor]:
         batch_size = len(features)
         if batch_size == 0:
-            raise ValueError("JointDataCollator received an empty batch")
+            raise ValueError("BaselineDataCollator received an empty batch")
 
         input_lengths = [len(feature["input_values"]) for feature in features]
         max_input_length = max(input_lengths)
@@ -68,20 +64,6 @@ class JointDataCollator:
             seq_len = values.size(0)
             input_values[idx, :seq_len] = values
             attention_mask[idx, :seq_len] = 1
-
-        concept_lengths = [len(feature["concept_labels"]) for feature in features]
-        max_concept_len = max(concept_lengths)
-
-        concept_labels = torch.full(
-            (batch_size, max_concept_len, self.concept_label_dim),
-            float(self.label_padding_value),
-            dtype=torch.float32,
-        )
-
-        for idx, feature in enumerate(features):
-            label_tensor = torch.tensor(feature["concept_labels"], dtype=torch.float32)
-            seq_len = label_tensor.size(0)
-            concept_labels[idx, :seq_len, :] = label_tensor
 
         task_lengths = [len(feature["task_labels"]) for feature in features]
         max_task_len = max(task_lengths)
@@ -100,7 +82,6 @@ class JointDataCollator:
         return {
             "input_values": input_values,
             "attention_mask": attention_mask,
-            "concept_labels": concept_labels,
             "task_labels": task_labels,
         }
 
@@ -110,9 +91,9 @@ def load_training_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
         return yaml.safe_load(fp)
 
 
-def prepare_dataset_joint(config: Dict[str, Any], feature_extractor: Wav2Vec2FeatureExtractor):
+def prepare_dataset_baselines(config: Dict[str, Any], feature_extractor: Wav2Vec2FeatureExtractor):
     dataset_path = Path(
-        config.get("processed_dataset_path_joint", "./datasets/processed_timit_dataset-joint")
+        config.get("processed_dataset_path_baselines", "./datasets/processed_timit_dataset-baselines")
     )
     os.makedirs(dataset_path.parent, exist_ok=True)
 
@@ -138,12 +119,12 @@ def prepare_dataset_joint(config: Dict[str, Any], feature_extractor: Wav2Vec2Fea
         )
 
         dataset = dataset.map(
-            format_for_joint,
-            desc="Formatting for joint training",
+            format_for_baselines,
+            desc="Formatting for baseline training",
             load_from_cache_file=False,
         )
 
-        keep_columns = {"input_values", "concept_labels", "task_labels"}
+        keep_columns = {"input_values", "task_labels"}
         for split in dataset.keys():
             remove_columns = [
                 column for column in dataset[split].column_names if column not in keep_columns
@@ -196,9 +177,6 @@ def compute_metrics(pred) -> Dict[str, float]:
         logits = logits[0]
     label_ids = _get_task_label_ids(pred.label_ids)
 
-    print(type(logits))
-    print(len(logits))
-
     pred_ids = np.argmax(logits, axis=-1)
     print(f"Percentage of blanks predicted: {(pred_ids == 0).mean():.2%}")
     pred_sequences = [_collapse_ctc_predictions(seq, blank_id=CTC_BLANK_ID) for seq in pred_ids]
@@ -245,16 +223,6 @@ def unfreeze_encoder_layers(model, layer_indices: List[int]) -> None:
         for param in encoder_layers[layer_idx].parameters():
             param.requires_grad = True
 
-
-def _get_gradnorm_parameter(model: torch.nn.Module) -> torch.nn.Parameter:
-    if hasattr(model, "concept_head"):
-        for param in model.concept_head.parameters():
-            if param.requires_grad:
-                return param
-    for param in model.wav2vec2.parameters():
-        if param.requires_grad:
-            return param
-    raise ValueError("GradNorm requires at least one trainable shared parameter.")
             
 
 if __name__ == "__main__":
@@ -267,18 +235,16 @@ if __name__ == "__main__":
     model_checkpoint = config["model_checkpoint"]
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_checkpoint)
 
-    dataset = prepare_dataset_joint(config, feature_extractor)
+    dataset = prepare_dataset_baselines(config, feature_extractor)
     eval_split = "validation" if "validation" in dataset else "test"
     print("eval split:", eval_split)
 
     vocab_size = len(PHONEME_TOKEN_TO_ID)
     print(f"Phoneme vocabulary size: {vocab_size}")
 
-    model = Wav2Vec2ForJointBottleneck.from_pretrained(     # Use from_pretrained so trained weights are used
+    model = Wav2Vec2Baseline.from_pretrained(     # Use from_pretrained so trained weights are used
         model_checkpoint,
-        num_concepts=BINARY_FEATURE_DIM,
         phoneme_vocab_size=vocab_size,
-        joint_lambda=config["joint_lambda"],
         use_safetensors=True
     )
 
@@ -301,7 +267,7 @@ if __name__ == "__main__":
     )
 
     training_args = TrainingArguments(
-        output_dir=config["output_dir_joint"],
+        output_dir=config["output_dir_baselines"],
         eval_strategy=config["eval_strategy"],
         learning_rate=config["learning_rate"],
         per_device_train_batch_size=config["per_device_train_batch_size"],
@@ -313,61 +279,41 @@ if __name__ == "__main__":
         warmup_steps=config["warmup_steps"],
         save_strategy=config["save_strategy"],
         fp16=config["use_fp16"],
-        label_names=["concept_labels", "task_labels"],
+        label_names=["task_labels"],
         report_to="wandb",
         dataloader_num_workers=0        # to fix the snellius pauses/stops -- does not work still
     )
 
-    data_collator = JointDataCollator(concept_label_dim=BINARY_FEATURE_DIM)
+    data_collator = BaselineDataCollator(concept_label_dim=BINARY_FEATURE_DIM)
     callbacks = []
+    
+    # if config.get("use_lambda_callback", False):
+    #     # Calculate max steps for the scheduler
+    #     num_update_steps_per_epoch = len(dataset["train"]) // training_args.per_device_train_batch_size
+    #     max_steps = math.ceil(training_args.num_train_epochs * num_update_steps_per_epoch)
 
-    use_gradnorm = config.get("use_gradnorm", False)
-    if use_gradnorm:
-        gradnorm_param = _get_gradnorm_parameter(model)
-        gradnorm_weighter = GradNormLossWeighter(
-            num_losses=2,
-            learning_rate=config.get("gradnorm_learning_rate", 1e-4),
-            restoring_force_alpha=config.get("gradnorm_alpha", 0.0),
-            grad_norm_parameters=gradnorm_param,
-        )
-        trainer = GradNormTrainer(
-            model=model,
-            args=training_args,
-            train_dataset=dataset["train"],
-            eval_dataset=dataset[eval_split],
-            data_collator=data_collator,
-            tokenizer=feature_extractor,
-            compute_metrics=compute_metrics,
-            callbacks=callbacks,
-            gradnorm_weighter=gradnorm_weighter,
-        )
-    else:
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=dataset["train"],
-            eval_dataset=dataset[eval_split],
-            data_collator=data_collator,
-            tokenizer=feature_extractor,
-            compute_metrics=compute_metrics,
-            callbacks=callbacks
-        )
+    #     lambda_scheduler = LambdaSchedulerCallback(
+    #         initial_lambda=config["initial_lambda"],
+    #         final_lambda=config["final_lambda"],
+    #         max_steps=max_steps,
+    #         schedule=config["schedule"]
+    #     )
+    #     callbacks.append(lambda_scheduler)
+    
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset[eval_split],
+        data_collator=data_collator,
+        tokenizer=feature_extractor,
+        compute_metrics=compute_metrics,
+        callbacks=callbacks
+    )
 
     trainer.train()
 
     test_results = trainer.predict(dataset["test"])
     print(test_results.metrics)
-
-    if config["joint_concept_metrics"]:
-        concept_metrics = evaluate_concept_layer(
-            model=model,
-            dataset=dataset["test"],
-            data_collator=data_collator,
-            batch_size=training_args.per_device_eval_batch_size,
-            device=trainer.args.device
-        )
-
-        print(concept_metrics)
-        wandb.log(concept_metrics)
 
     wandb_run.finish()

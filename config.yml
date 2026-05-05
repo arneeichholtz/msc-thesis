@@ -1,6 +1,7 @@
 processed_dataset_path_cl: ./datasets/processed_timit_dataset-conceptlayer
 processed_dataset_path_tl: ./datasets/processed_timit_dataset-tasklayer
 processed_dataset_path_joint: ./datasets/processed_timit_dataset-joint
+processed_dataset_path_baselines: ./datasets/processed_timit_dataset-baselines
 
 load_processed_dataset: True   # If True, load processed TIMIT dataset with frames and labels from disk.
 
@@ -16,6 +17,7 @@ model_checkpoint: facebook/wav2vec2-base    # Will be used for model and process
 output_dir_concept_layer: /projects/0/prjs1921/thesis-speech/model_checkpoints/wav2vec2-conceptlayer
 output_dir_task_layer: /projects/0/prjs1921/thesis-speech/model_checkpoints/wav2vec2-tasklayer
 output_dir_joint: /projects/0/prjs1921/thesis-speech/model_checkpoints/wav2vec2-joint
+output_dir_baselines: /projects/0/prjs1921/thesis-speech/model_checkpoints/wav2vec2-baselines
 
 eval_strategy: steps
 learning_rate: 0.0001
@@ -33,6 +35,9 @@ sample_validation_set: True
 sample_validation_size: 0.10
 
 joint_lambda: 1
+use_gradnorm: False
+gradnorm_learning_rate: 0.0001
+gradnorm_alpha: 0.0
 
 use_lambda_callback: False
 initial_lambda: 50
@@ -42,7 +47,7 @@ schedule: linear   # Options: linear, exponential, step
 joint_concept_metrics: False     # Calculate concept metrics for joint bottleneck optimization
 
 use_initial_unfreeze: True      # If True, unfreeze specified wav2vec2 encoder layers from the start of training
-unfreeze_layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]           # List of wav2vec2 encoder layer indices to unfreeze from the start of training (e.g., [8, 9, 10, 11] to unfreeze the last 4 layers)  
+unfreeze_layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]           # List of wav2vec2 encoder layer indices to unfreeze from the start of training (e.g., [8, 9, 10, 11] to unfreeze the last 4 layers)        unfreeze_layers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
 wandb_project: thesis-cbm       # WandB project name for logging training runs
-run_name: wav2vec2-joint-baseline-ft-lr0.0001
+run_name: wav2vec2-joint-gradnorm-lr0.0001

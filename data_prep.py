@@ -337,3 +337,10 @@ def format_for_joint(batch: Dict) -> Dict:
         "task_labels": phoneme_sequence_to_ids(batch["phonetic_detail"]["utterance"]),
     }
 
+def format_for_baselines(batch: Dict) -> Dict:
+    """Format batch for baseline training with task labels."""
+    return {
+        "input_values": _ensure_serializable_inputs(batch["input_values"]),
+        "task_labels": phoneme_sequence_to_ids(batch["phonetic_detail"]["utterance"]),
+    }
+
