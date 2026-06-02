@@ -1,0 +1,25 @@
+{
+  "group": "roundness",
+  "labels": [
+    "Unrounded",
+    "Rounded",
+    "silence_round"
+  ],
+  "matrix": [
+    [
+      169634,
+      1830,
+      4079
+    ],
+    [
+      2216,
+      15734,
+      266
+    ],
+    [
+      3591,
+      227,
+      60934
+    ]
+  ]
+}

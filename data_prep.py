@@ -177,7 +177,7 @@ def extract_framewise_binfeatures(batch: Dict) -> Dict:
         frame_labels[unassigned] = SILENCE_VECTOR
 
     batch["num_frames"] = num_frames
-    batch["labels"] = frame_labels.tolist()
+    batch["concept_labels"] = frame_labels.tolist()
     batch["binary_feature_dim"] = BINARY_FEATURE_DIM
 
     return batch
@@ -333,7 +333,7 @@ def format_for_joint(batch: Dict) -> Dict:
     """Format batch for joint training with concept and task labels."""
     return {
         "input_values": _ensure_serializable_inputs(batch["input_values"]),
-        "concept_labels": _ensure_serializable_inputs(batch["labels"]),
+        "concept_labels": _ensure_serializable_inputs(batch["concept_labels"]),
         "task_labels": phoneme_sequence_to_ids(batch["phonetic_detail"]["utterance"]),
     }
 

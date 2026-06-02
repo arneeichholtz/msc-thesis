@@ -12,7 +12,6 @@ import yaml
 import wandb
 import os
 import numpy as np
-from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
 from transformers import (
     Trainer,
     TrainingArguments,
@@ -29,7 +28,10 @@ from data_prep import (
     prepare_audio_samples,
     FEATURE_GROUPS_LABELS
 )
+
 from model import Wav2Vec2ForArticulatoryFeatures
+from utils.concept_utils import compute_concept_metrics
+from utils.utils import print_dataset_statistics
 
 CONFIG_PATH = Path("config.yml")
 
@@ -59,19 +61,19 @@ class ArticulatoryFeatureDataCollator:
             input_values[idx, :seq_len] = values
             attention_mask[idx, :seq_len] = 1
 
-        label_lengths = [len(feature["labels"]) for feature in features]
+        label_lengths = [len(feature["concept_labels"]) for feature in features]
         max_label_length = max(label_lengths)
 
         labels = torch.full((batch_size, max_label_length, self.label_dim), -100.0, dtype=torch.float32)
         for idx, feature in enumerate(features):
-            label_tensor = torch.tensor(feature["labels"], dtype=torch.float32)
+            label_tensor = torch.tensor(feature["concept_labels"], dtype=torch.float32)
             seq_len = label_tensor.size(0)
             labels[idx, :seq_len, :] = label_tensor
 
         return {
             "input_values": input_values,
             "attention_mask": attention_mask,
-            "labels": labels,
+            "concept_labels": labels,
         }
 
 
@@ -95,115 +97,21 @@ def unfreeze_encoder_layers(model, layer_indices: List[int]) -> None:
 def compute_metrics(eval_pred):
     logits = eval_pred.predictions
     labels = eval_pred.label_ids
-
-    logits_flat = logits.reshape(-1, logits.shape[-1])                      # Reshape to (total_frames, 29)
-    labels_flat = labels.reshape(-1, labels.shape[-1]).astype(np.int32)
-    
-    # Only calculate metrics on 
-    valid_mask = (labels_flat != -100).all(axis=1)
-    logits_flat = logits_flat[valid_mask]
-    labels_flat = labels_flat[valid_mask]
-    
-    # Convert logits to probabilities, then to 0/1 predictions
-    probs = 1 / (1 + np.exp(-logits_flat))
-    predictions = (probs > 0.5).astype(np.int32)
-    
-    # Macro F1: Averages the F1 of each of the 29 features
-    macro_f1 = f1_score(labels_flat, predictions, average='macro', zero_division=0)
-    micro_f1 = f1_score(labels_flat, predictions, average='micro', zero_division=0)
-
-    # Precision & Recall (Macro)
-    macro_precision = precision_score(labels_flat, predictions, average='macro', zero_division=0)
-    macro_recall = recall_score(labels_flat, predictions, average='macro', zero_division=0)
-    
-    # Vector Accuracy: Strict (All 29 features of the vector must match)
-    vect_accuracy = accuracy_score(labels_flat, predictions)
-    
-    # Element-wise Accuracy: Treat every one of the 29 decisions independently
-    element_wise_acc = (predictions == labels_flat).mean()
-
-    return {
-        "macro_f1": macro_f1,
-        "micro_f1": micro_f1,
-        "macro_precision": macro_precision,
-        "macro_recall": macro_recall,
-        "vect_accuracy": vect_accuracy,
-        "element_wise_accuracy": element_wise_acc
-    }
-
-
-def print_dataset_statistics(dataset: DatasetDict):
-    """Calculates and prints the distribution of binary features in the dataset."""
-    feature_labels = [label for group in FEATURE_GROUPS_LABELS for label in group.labels]
-    # feature_labels = [f"{group.name}_{label}" for group in FEATURE_GROUPS_LABELS for label in group.labels]
-
-    print("feature labels: ", feature_labels)
-    
-    print("\n" + "="*80)
-    print("DATASET FEATURE DISTRIBUTION")
-    print("="*80)
-
-    total_feature_counts = np.zeros(BINARY_FEATURE_DIM, dtype=np.int64)
-
-    for split in dataset.keys():
-        print(f"\n--- Split: {split} ---")
-        split_data = dataset[split]
-        
-        # Initialize counters
-        feature_counts = np.zeros(BINARY_FEATURE_DIM, dtype=np.int64)
-        for item in split_data:
-            
-            labels = np.array(item['labels'])
-            
-            # Sum down the frame axis (axis 0)
-            feature_counts += labels.sum(axis=0).astype(np.int64)
-
-        split_counts = {label: int(feature_counts[i]) for i, label in enumerate(feature_labels)}
-        print(split_counts)
-
-        total_feature_counts += feature_counts
-
-    total_counts = {label: int(total_feature_counts[i]) for i, label in enumerate(feature_labels)}
-    print("\n--- Split: all ---")
-    print(total_counts)
-            
-    print("="*80 + "\n")
+    return compute_concept_metrics(
+        logits,
+        labels,
+        print_feature_counts=False,
+    )
 
 
 def print_per_feature_statistics(test_results):
-    # Calculate per-feature accuracy
     test_logits = test_results.predictions
     test_labels = test_results.label_ids
-
-    # Flatten batch and sequence dimensions
-    flat_logits = test_logits.reshape(-1, test_logits.shape[-1])
-    flat_labels = test_labels.reshape(-1, test_labels.shape[-1])
-
-    # Filter out padded tokens (where labels are -100)
-    valid_mask = (flat_labels != -100).all(axis=1)
-    flat_logits = flat_logits[valid_mask]
-    flat_labels = flat_labels[valid_mask]
-
-    # Convert logits to binary predictions
-    probs = 1 / (1 + np.exp(-flat_logits))
-    predictions = (probs > 0.5).astype(int)
-
-    # Calculate accuracy per feature (axis 0 is the sample dimension now)
-    per_feature_accuracy = (predictions == flat_labels).mean(axis=0)
-    
-    # feature_labels = [label for group in FEATURE_GROUPS_LABELS for label in group.labels]
-    feature_labels = [f"{group.name}_{label}" for group in FEATURE_GROUPS_LABELS for label in group.labels]
-    
-    assert len(per_feature_accuracy) == len(feature_labels), "Number of features in accuracy does not match number of feature labels."
-    print("Len per_feature_accuracy:", len(per_feature_accuracy))
-    print("Len feature_labels:", len(feature_labels))
-    
-    print("\n=== Per-Feature Accuracy ===")
-    for i, acc in enumerate(per_feature_accuracy):
-        print(f"Feature {i} ({feature_labels[i]}): {acc:.4f}")
-
-    per_feature_acc_dict = {f"{feature_labels[i]}": float(per_feature_accuracy[i]) for i in range(len(feature_labels))}
-    print(per_feature_acc_dict)
+    compute_concept_metrics(
+        test_logits,
+        test_labels,
+        print_feature_counts=True,
+    )
 
 
 def prepare_dataset_cl(config, feature_extractor):
@@ -234,7 +142,7 @@ def prepare_dataset_cl(config, feature_extractor):
             load_from_cache_file=False
         )
 
-        keep_columns = {"input_values", "labels"}
+        keep_columns = {"input_values", "concept_labels"}
         for split in dataset.keys():
             remove_columns = [
                 column for column in dataset[split].column_names if column not in keep_columns
@@ -283,57 +191,59 @@ if __name__ == "__main__":
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_checkpoint)
     
     dataset = prepare_dataset_cl(config, feature_extractor)
-    # model = initialize_model(config)
+    model = initialize_model(config)
 
     eval_split = "validation" if "validation" in dataset else "test"
     print(f"Evaluation split: {eval_split}")
 
     print_dataset_statistics(dataset)
 
-    # load_dotenv()
-    # api_key = os.getenv("WANDB_API_KEY")
-    # wandb.login(key=api_key)
+    load_dotenv()
+    api_key = os.getenv("WANDB_API_KEY")
+    wandb.login(key=api_key)
     
-    # wandb_run = wandb.init(
-    #     project=config["wandb_project"],
-    #     name=config["run_name"],
-    #     config=config,
-    # )
+    wandb_run = wandb.init(
+        project=config["wandb_project"],
+        name=config["run_name"],
+        config=config,
+    )
 
-    # training_args = TrainingArguments(
-    #     output_dir=config["output_dir_concept_layer"],
-    #     eval_strategy=config["eval_strategy"],
-    #     learning_rate=config["learning_rate"],
-    #     per_device_train_batch_size=config["per_device_train_batch_size"],
-    #     per_device_eval_batch_size=config["per_device_eval_batch_size"],
-    #     num_train_epochs=config["num_train_epochs"],
-    #     logging_steps=config["logging_steps"],
-    #     save_steps=config["save_steps"],
-    #     eval_steps=config["eval_steps"],
-    #     warmup_steps=config["warmup_steps"],
-    #     save_total_limit=config["save_total_limit"],
-    #     fp16=config["use_fp16"],
-    #     report_to="wandb"
-    # )
+    training_args = TrainingArguments(
+        output_dir=config["output_dir_concept_layer"],
+        eval_strategy=config["eval_strategy"],
+        learning_rate=config["learning_rate"],
+        per_device_train_batch_size=config["per_device_train_batch_size"],
+        per_device_eval_batch_size=config["per_device_eval_batch_size"],
+        num_train_epochs=config["num_train_epochs"],
+        logging_steps=config["logging_steps"],
+        save_steps=config["save_steps"],
+        eval_steps=config["eval_steps"],
+        warmup_steps=config["warmup_steps"],
+        save_total_limit=config["save_total_limit"],
+        fp16=config["use_fp16"],
+        report_to="wandb",
+        label_names=["concept_labels"],
+        dataloader_num_workers=0,
+    )
 
-    # num_labels = BINARY_FEATURE_DIM
-    # data_collator = ArticulatoryFeatureDataCollator(label_dim=num_labels)
+    num_labels = BINARY_FEATURE_DIM
+    data_collator = ArticulatoryFeatureDataCollator(label_dim=num_labels)
 
-    # trainer = Trainer(      # Trainer handles device placement
-    #     model=model,
-    #     args=training_args,
-    #     train_dataset=dataset["train"],
-    #     eval_dataset=dataset[eval_split],
-    #     data_collator=data_collator,
-    #     tokenizer=feature_extractor,
-    #     compute_metrics=compute_metrics
-    # )
+    trainer = Trainer(      # Trainer handles device placement
+        model=model,
+        args=training_args,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset[eval_split],
+        data_collator=data_collator,
+        tokenizer=feature_extractor,
+        compute_metrics=compute_metrics
+    )
 
-    # trainer.train()
+    trainer.train()
 
-    # test_results = trainer.predict(dataset["test"])
-    # print(test_results.metrics)
+    test_results = trainer.predict(dataset["test"])
+    print(test_results.metrics)
 
-    # # print_per_feature_statistics(test_results)
+    print_per_feature_statistics(test_results)
 
-    # wandb_run.finish()
+    wandb_run.finish()

@@ -5,8 +5,21 @@
 #SBATCH --job-name=run_train_cl
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --time=00:05:00
+#SBATCH --time=01:00:00
 #SBATCH --output=outputs/run_train_cl_%A.out
+
+mkdir -p "$TMPDIR/project_files"
+cp -r "/projects/0/prjs1921/thesis-speech/model_checkpoints/wav2vec2-conceptlayer" "$TMPDIR/project_files/"
+
+mkdir -p "$TMPDIR/processed_datasets"
+cp -r "/gpfs/home6/aeichholtz/msc-thesis/datasets/processed_timit_dataset-conceptlayer" \
+	"$TMPDIR/processed_datasets/processed_timit_dataset-conceptlayer"
+
+export PROCESSED_DATASET_PATH_CL="$TMPDIR/processed_datasets/processed_timit_dataset-conceptlayer"
+
+export HF_HOME="$TMPDIR/hf_home"
+export HF_DATASETS_CACHE="$TMPDIR/hf_datasets"
+export TRANSFORMERS_CACHE="$TMPDIR/hf_models"
 
 module purge
 module load 2023

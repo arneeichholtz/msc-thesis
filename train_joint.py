@@ -19,7 +19,6 @@ from jiwer import wer
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from transformers import Trainer, TrainingArguments, Wav2Vec2FeatureExtractor
 from gradnorm_pytorch import GradNormLossWeighter
-# from transformers import TrainerCallback, TrainerControl, TrainerState
 
 from data_prep import (
     BINARY_FEATURE_DIM,
@@ -30,8 +29,17 @@ from data_prep import (
     format_for_joint,
 )
 from model import Wav2Vec2ForJointBottleneck
-from utils.utils import LambdaSchedulerCallback, GradNormTrainer
+from utils.utils import LambdaSchedulerCallback, GradNormTrainer, print_dataset_statistics
 from utils.concept_utils import evaluate_concept_layer
+from utils.ctc_utils import (
+    build_ctc_sequences,
+    build_confusion_matrix_data,
+    build_top_errors_by_group,
+    save_ctc_sequences,
+    save_confusion_matrix_data,
+    save_top_errors_by_group,
+    print_top_test_errors,
+)
 
 CONFIG_PATH = Path("config.yml")
 
@@ -107,7 +115,21 @@ class JointDataCollator:
 
 def load_training_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as fp:
-        return yaml.safe_load(fp)
+        config = yaml.safe_load(fp)
+
+    env_dataset_path = os.getenv("PROCESSED_DATASET_PATH_JOINT")
+    if env_dataset_path:
+        config["processed_dataset_path_joint"] = env_dataset_path
+
+    base_output_dir = Path(config["output_dir_joint"])
+    lambda_value = config.get("joint_lambda")
+    if lambda_value is None:
+        raise KeyError("joint_lambda is required to build the checkpoint folder name")
+    lambda_dir = base_output_dir / f"lambda-{lambda_value}"
+    lambda_dir.mkdir(parents=True, exist_ok=True)
+    config["output_dir_joint"] = str(lambda_dir)
+
+    return config
 
 
 def prepare_dataset_joint(config: Dict[str, Any], feature_extractor: Wav2Vec2FeatureExtractor):
@@ -154,6 +176,26 @@ def prepare_dataset_joint(config: Dict[str, Any], feature_extractor: Wav2Vec2Fea
         print(f"Saving processed dataset to: {dataset_path}")
         dataset.save_to_disk(str(dataset_path))
 
+    sample_index = config.get("single_sample_index")
+    print(f"Sample index: {sample_index}")
+    
+    if sample_index is not None:
+        split_name = config.get("single_sample_split", "test")
+        if split_name not in dataset:
+            raise KeyError(f"Split '{split_name}' not found in dataset.")
+        split_dataset = dataset[split_name]
+        if sample_index < 0 or sample_index >= len(split_dataset):
+            raise IndexError(
+                f"single_sample_index {sample_index} is out of range for split '{split_name}'."
+            )
+        sample_output_dir = Path("./datasets")
+        sample_output_dir.mkdir(parents=True, exist_ok=True)
+        single_sample_path = sample_output_dir / (
+            f"processed_timit_dataset-joint-sample-{split_name}-{sample_index}"
+        )
+        split_dataset.select([sample_index]).save_to_disk(str(single_sample_path))
+        print(f"Saved single-sample dataset to: {single_sample_path}")
+
     return dataset
 
 
@@ -195,9 +237,6 @@ def compute_metrics(pred) -> Dict[str, float]:
     if isinstance(logits, tuple):
         logits = logits[0]
     label_ids = _get_task_label_ids(pred.label_ids)
-
-    print(type(logits))
-    print(len(logits))
 
     pred_ids = np.argmax(logits, axis=-1)
     print(f"Percentage of blanks predicted: {(pred_ids == 0).mean():.2%}")
@@ -246,15 +285,77 @@ def unfreeze_encoder_layers(model, layer_indices: List[int]) -> None:
             param.requires_grad = True
 
 
-def _get_gradnorm_parameter(model: torch.nn.Module) -> torch.nn.Parameter:
-    if hasattr(model, "concept_head"):
-        for param in model.concept_head.parameters():
-            if param.requires_grad:
-                return param
-    for param in model.wav2vec2.parameters():
-        if param.requires_grad:
-            return param
-    raise ValueError("GradNorm requires at least one trainable shared parameter.")
+def _find_latest_checkpoint(output_dir: Path) -> Path:
+    checkpoints = []
+    for path in output_dir.iterdir():
+        if path.is_dir() and path.name.startswith("checkpoint-"):
+            step_str = path.name.split("checkpoint-")[-1]
+            if step_str.isdigit():
+                checkpoints.append((int(step_str), path))
+
+    if not checkpoints:
+        raise FileNotFoundError(
+            f"No checkpoints found in output_dir_joint: {output_dir}"
+        )
+
+    checkpoints.sort(key=lambda item: item[0])
+    return checkpoints[-1][1]
+
+
+def save_test_outputs(config: Dict[str, Any], test_results) -> None:
+    test_label_ids = _get_task_label_ids(test_results.label_ids)
+    ctc_sequences = build_ctc_sequences(
+        test_results.predictions,
+        test_label_ids,
+        ID_TO_PHONEME,
+        blank_id=CTC_BLANK_ID,
+    )
+    ctc_output_path = Path(
+        config.get("ctc_predictions_output", "data_outputs/joint_test_predictions.json")
+    )
+    save_ctc_sequences(ctc_output_path, ctc_sequences)
+    print(f"Saved CTC predictions to: {ctc_output_path}")
+
+    if config.get("save_confusion_matrix", False):
+        confusion_output_path = Path(
+            config.get("ctc_confusion_output", "data_outputs/joint_test_confusion.json")
+        )
+        confusion_data = build_confusion_matrix_data(
+            ctc_sequences,
+            label_order=[token for token in ID_TO_PHONEME.values() if token != "<blank>"],
+            null_token="NUL",
+        )
+        save_confusion_matrix_data(confusion_output_path, confusion_data)
+        print(f"Saved CTC confusion data to: {confusion_output_path}")
+
+    if config.get("save_dialect_errors", False):
+        dialect_dataset = load_timit_dataset(
+            config.get("sample_validation_set", True),
+            config.get("sample_validation_size", 0.10),
+        )
+
+        dialect_regions = dialect_dataset["test"]["dialect_region"]
+        if len(dialect_regions) != len(ctc_sequences):
+            raise ValueError(
+                "Dialect region length does not match test sequences: "
+                f"{len(dialect_regions)} vs {len(ctc_sequences)}"
+            )
+
+        dialect_error_data = build_top_errors_by_group(
+            ctc_sequences,
+            dialect_regions,
+            null_token="NUL",
+            top_k=config.get("dialect_error_top_k", 10),
+        )
+        dialect_output_path = Path(
+            config.get(
+                "ctc_dialect_errors_output",
+                "data_outputs/joint_test_dialect_errors.json",
+            )
+        )
+        save_top_errors_by_group(dialect_output_path, dialect_error_data)
+        print(f"Saved dialect-region error summary to: {dialect_output_path}")
+
             
 
 if __name__ == "__main__":
@@ -263,6 +364,9 @@ if __name__ == "__main__":
     print("Training configuration:")
     for key, value in config.items():
         print(f"  {key}: {value}")
+
+    run_eval_only = config["run_eval_only"]
+    joint_checkpoint_path = config.get("joint_checkpoint_path")
 
     model_checkpoint = config["model_checkpoint"]
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_checkpoint)
@@ -274,21 +378,36 @@ if __name__ == "__main__":
     vocab_size = len(PHONEME_TOKEN_TO_ID)
     print(f"Phoneme vocabulary size: {vocab_size}")
 
-    model = Wav2Vec2ForJointBottleneck.from_pretrained(     # Use from_pretrained so trained weights are used
-        model_checkpoint,
+    if joint_checkpoint_path:
+        checkpoint_path = Path(joint_checkpoint_path)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(
+                f"joint_checkpoint_path does not exist: {checkpoint_path}"
+            )
+        pretrained_source = str(checkpoint_path)
+    elif run_eval_only:
+        output_dir = Path(config["output_dir_joint"])
+        checkpoint_path = _find_latest_checkpoint(output_dir)
+        print(f"Using latest checkpoint from output_dir_joint: {checkpoint_path}")
+        pretrained_source = str(checkpoint_path)
+    else:
+        pretrained_source = model_checkpoint
+    model = Wav2Vec2ForJointBottleneck.from_pretrained(
+        pretrained_source,
         num_concepts=BINARY_FEATURE_DIM,
         phoneme_vocab_size=vocab_size,
         joint_lambda=config["joint_lambda"],
         use_safetensors=True
     )
 
-    initial_unfreeze = config.get("use_initial_unfreeze", False)
-    if initial_unfreeze:
-        unfreeze_layer_indices = config["unfreeze_layers"]
-        unfreeze_encoder_layers(model, unfreeze_layer_indices)
-        print(f"Wav2Vec2 encoder layer indices included for fine-tuning: {unfreeze_layer_indices}.")
-    else:
-        print("Using default: keeping all wav2vec2 encoder layers frozen at the start of training.")
+    if not run_eval_only:
+        initial_unfreeze = config.get("use_initial_unfreeze", False)
+        if initial_unfreeze:
+            unfreeze_layer_indices = config["unfreeze_layers"]
+            unfreeze_encoder_layers(model, unfreeze_layer_indices)
+            print(f"Wav2Vec2 encoder layer indices included for fine-tuning: {unfreeze_layer_indices}.")
+        else:
+            print("Using default: keeping all wav2vec2 encoder layers frozen at the start of training.")
 
     load_dotenv()
     api_key = os.getenv("WANDB_API_KEY")
@@ -311,63 +430,55 @@ if __name__ == "__main__":
         save_steps=config["save_steps"],
         eval_steps=config["eval_steps"],
         warmup_steps=config["warmup_steps"],
-        save_strategy=config["save_strategy"],
+        # save_strategy=config["save_strategy"],
+        save_total_limit=config["save_total_limit"],
         fp16=config["use_fp16"],
         label_names=["concept_labels", "task_labels"],
         report_to="wandb",
-        dataloader_num_workers=0        # to fix the snellius pauses/stops -- does not work still
+        dataloader_num_workers=0        # to fix the snellius pauses/stops -- still does not always work
     )
 
     data_collator = JointDataCollator(concept_label_dim=BINARY_FEATURE_DIM)
-    callbacks = []
+    
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset[eval_split],
+        data_collator=data_collator,
+        tokenizer=feature_extractor,
+        compute_metrics=compute_metrics,
+    )
 
-    use_gradnorm = config.get("use_gradnorm", False)
-    if use_gradnorm:
-        gradnorm_param = _get_gradnorm_parameter(model)
-        gradnorm_weighter = GradNormLossWeighter(
-            num_losses=2,
-            learning_rate=config.get("gradnorm_learning_rate", 1e-4),
-            restoring_force_alpha=config.get("gradnorm_alpha", 0.0),
-            grad_norm_parameters=gradnorm_param,
-        )
-        trainer = GradNormTrainer(
-            model=model,
-            args=training_args,
-            train_dataset=dataset["train"],
-            eval_dataset=dataset[eval_split],
-            data_collator=data_collator,
-            tokenizer=feature_extractor,
-            compute_metrics=compute_metrics,
-            callbacks=callbacks,
-            gradnorm_weighter=gradnorm_weighter,
-        )
-    else:
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=dataset["train"],
-            eval_dataset=dataset[eval_split],
-            data_collator=data_collator,
-            tokenizer=feature_extractor,
-            compute_metrics=compute_metrics,
-            callbacks=callbacks
-        )
-
-    trainer.train()
+    if not run_eval_only:
+        trainer.train()
 
     test_results = trainer.predict(dataset["test"])
     print(test_results.metrics)
+    print_top_test_errors(
+        test_results,
+        id_to_token=ID_TO_PHONEME,
+        blank_id=CTC_BLANK_ID,
+        top_k=15,
+    )
+    
+    if config.get("save_test_results", False):
+        save_test_outputs(config, test_results)
 
     if config["joint_concept_metrics"]:
+        print("Calculating concept layer metrics...")
         concept_metrics = evaluate_concept_layer(
             model=model,
             dataset=dataset["test"],
             data_collator=data_collator,
             batch_size=training_args.per_device_eval_batch_size,
-            device=trainer.args.device
+            device=trainer.args.device,
+            confusion_output_dir=config.get(
+                "concept_confusion_output_dir",
+                "data_outputs/concept_feature_confusions",
+            ),
         )
 
         print(concept_metrics)
-        wandb.log(concept_metrics)
 
     wandb_run.finish()

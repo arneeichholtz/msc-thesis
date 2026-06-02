@@ -6,6 +6,9 @@ import wandb
 from gradnorm_pytorch import GradNormLossWeighter
 import torch
 from typing import Dict
+from datasets import DatasetDict
+from data_prep import BINARY_FEATURE_DIM, FEATURE_GROUPS_LABELS
+import numpy as np
 
 class LambdaSchedulerCallback(TrainerCallback):
     """Schedules the joint_lambda parameter during training."""
@@ -77,50 +80,40 @@ class GradNormTrainer(Trainer):
 
 
 
+def print_dataset_statistics(dataset: DatasetDict):
+    """Calculates and prints the distribution of binary features in the dataset."""
+    feature_labels = [label for group in FEATURE_GROUPS_LABELS for label in group.labels]
+    # feature_labels = [f"{group.name}_{label}" for group in FEATURE_GROUPS_LABELS for label in group.labels]
 
-# from __future__ import annotations
-
-# from typing import List, Optional
-
-# from transformers import TrainerCallback, TrainerControl, TrainerState
-
-
-# def unfreeze_encoder_layers(model, layer_indices: List[int]) -> None:
-#     """Unfreeze specific wav2vec2 encoder transformer layers by index."""
-#     if layer_indices is None:
-#         return
-
-#     encoder_layers = model.wav2vec2.encoder.layers
-
-#     for layer_idx in layer_indices:
-#         for param in encoder_layers[layer_idx].parameters():
-#             param.requires_grad = True
-
-
-# class UnfreezingCallback(TrainerCallback):
-#     """Unfreeze the wav2vec2 encoder (Transformer layers) after a specified number of steps."""
-
-#     def __init__(self, model, thaw_step: int = 1000, unfreeze_layers: Optional[List[int]] = None):
-#         self.model = model
-#         self.thaw_step = thaw_step
-#         self.unfreeze_layers = unfreeze_layers
+    print("feature labels: ", feature_labels)
     
-#     def on_step_begin(
-#         self,
-#         args,
-#         state: TrainerState,
-#         control: TrainerControl,
-#         **kwargs,
-#     ) -> Optional[TrainerControl]:
-#         if state.global_step == self.thaw_step:
-#             if self.unfreeze_layers is not None:
-#                 # Unfreeze only specific transformer layers
-#                 unfreeze_encoder_layers(self.model, self.unfreeze_layers)
-#                 print(f"[UnfreezingCallback] Unfroze wav2vec2 encoder layers {self.unfreeze_layers} at step {self.thaw_step}.")
+    print("\n" + "="*80)
+    print("DATASET FEATURE DISTRIBUTION")
+    print("="*80)
+
+    total_feature_counts = np.zeros(BINARY_FEATURE_DIM, dtype=np.int64)
+
+    for split in dataset.keys():
+        print(f"\n--- Split: {split} ---")
+        split_data = dataset[split]
+        
+        # Initialize counters
+        feature_counts = np.zeros(BINARY_FEATURE_DIM, dtype=np.int64)
+        for item in split_data:
             
-#             else:
-#                 # Unfreeze the entire encoder structure
-#                 for param in self.model.wav2vec2.encoder.parameters():
-#                     param.requires_grad = True
-#                 print(f"[UnfreezingCallback] Unfroze wav2vec2 encoder at step {self.thaw_step}.")
-#         return control
+            labels = np.array(item['concept_labels'])
+            
+            # Sum down the frame axis (axis 0)
+            feature_counts += labels.sum(axis=0).astype(np.int64)
+
+        split_counts = {label: int(feature_counts[i]) for i, label in enumerate(feature_labels)}
+        print(split_counts)
+
+        total_feature_counts += feature_counts
+
+    total_counts = {label: int(total_feature_counts[i]) for i, label in enumerate(feature_labels)}
+    print("\n--- Split: all ---")
+    print(total_counts)
+            
+    print("="*80 + "\n")
+

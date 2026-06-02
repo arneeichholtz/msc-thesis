@@ -1,0 +1,25 @@
+{
+  "group": "phonation",
+  "labels": [
+    "Voiced",
+    "Unvoiced",
+    "silence_phonation"
+  ],
+  "matrix": [
+    [
+      150041,
+      2199,
+      3143
+    ],
+    [
+      1789,
+      35360,
+      1227
+    ],
+    [
+      2864,
+      977,
+      60911
+    ]
+  ]
+}

@@ -27,6 +27,12 @@ from data_prep import (
 )
 
 from model import Wav2Vec2Baseline
+from utils.ctc_utils import (
+    build_ctc_sequences,
+    save_ctc_sequences,
+    build_confusion_matrix_data,
+    save_confusion_matrix_data,
+)
 # from utils.utils import LambdaSchedulerCallback
 
 CONFIG_PATH = Path("config.yml")
@@ -88,7 +94,21 @@ class BaselineDataCollator:
 
 def load_training_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as fp:
-        return yaml.safe_load(fp)
+        config = yaml.safe_load(fp)
+
+    env_dataset_path = os.getenv("PROCESSED_DATASET_PATH_BASELINES")
+    if env_dataset_path:
+        config["processed_dataset_path_baselines"] = env_dataset_path
+
+    env_model_checkpoint = os.getenv("MODEL_CHECKPOINT_BASELINES")
+    if env_model_checkpoint:
+        config["model_checkpoint"] = env_model_checkpoint
+
+    baseline_checkpoint_path = config.get("baseline_checkpoint_path")
+    if baseline_checkpoint_path:
+        config["model_checkpoint"] = baseline_checkpoint_path
+
+    return config
 
 
 def prepare_dataset_baselines(config: Dict[str, Any], feature_extractor: Wav2Vec2FeatureExtractor):
@@ -223,7 +243,50 @@ def unfreeze_encoder_layers(model, layer_indices: List[int]) -> None:
         for param in encoder_layers[layer_idx].parameters():
             param.requires_grad = True
 
-            
+
+def _find_latest_checkpoint(output_dir: Path) -> Path:
+    checkpoints = []
+    for path in output_dir.iterdir():
+        if path.is_dir() and path.name.startswith("checkpoint-"):
+            step_str = path.name.split("checkpoint-")[-1]
+            if step_str.isdigit():
+                checkpoints.append((int(step_str), path))
+
+    if not checkpoints:
+        raise FileNotFoundError(
+            f"No checkpoints found in output_dir_baselines: {output_dir}"
+        )
+
+    checkpoints.sort(key=lambda item: item[0])
+    return checkpoints[-1][1]
+
+
+def save_test_outputs(config: Dict[str, Any], test_results) -> None:
+    test_label_ids = _get_task_label_ids(test_results.label_ids)
+    ctc_sequences = build_ctc_sequences(
+        test_results.predictions,
+        test_label_ids,
+        ID_TO_PHONEME,
+        blank_id=CTC_BLANK_ID,
+    )
+    ctc_output_path = Path(
+        config.get("ctc_predictions_output", "data_outputs/baseline_test_predictions.json")
+    )
+    save_ctc_sequences(ctc_output_path, ctc_sequences)
+    print(f"Saved CTC predictions to: {ctc_output_path}")
+
+    confusion_output_path = Path(
+        config.get("ctc_confusion_output", "data_outputs/baseline_test_confusion.json")
+    )
+    confusion_data = build_confusion_matrix_data(
+        ctc_sequences,
+        label_order=[
+            token for token in ID_TO_PHONEME.values() if token != "<blank>"
+        ],
+        null_token="NUL",
+    )
+    save_confusion_matrix_data(confusion_output_path, confusion_data)
+    print(f"Saved CTC confusion data to: {confusion_output_path}")
 
 if __name__ == "__main__":
     
@@ -231,6 +294,9 @@ if __name__ == "__main__":
     print("Training configuration:")
     for key, value in config.items():
         print(f"  {key}: {value}")
+
+    run_eval_only = config.get("run_eval_only", False)
+    baseline_checkpoint_path = config.get("baseline_checkpoint_path")
 
     model_checkpoint = config["model_checkpoint"]
     feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_checkpoint)
@@ -242,8 +308,23 @@ if __name__ == "__main__":
     vocab_size = len(PHONEME_TOKEN_TO_ID)
     print(f"Phoneme vocabulary size: {vocab_size}")
 
+    if baseline_checkpoint_path:
+        checkpoint_path = Path(baseline_checkpoint_path)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(
+                f"baseline_checkpoint_path does not exist: {checkpoint_path}"
+            )
+        pretrained_source = str(checkpoint_path)
+    elif run_eval_only:
+        output_dir = Path(config["output_dir_baselines"])
+        checkpoint_path = _find_latest_checkpoint(output_dir)
+        print(f"Using latest checkpoint from output_dir_baselines: {checkpoint_path}")
+        pretrained_source = str(checkpoint_path)
+    else:
+        pretrained_source = model_checkpoint
+
     model = Wav2Vec2Baseline.from_pretrained(     # Use from_pretrained so trained weights are used
-        model_checkpoint,
+        pretrained_source,
         phoneme_vocab_size=vocab_size,
         use_safetensors=True
     )
@@ -277,7 +358,8 @@ if __name__ == "__main__":
         save_steps=config["save_steps"],
         eval_steps=config["eval_steps"],
         warmup_steps=config["warmup_steps"],
-        save_strategy=config["save_strategy"],
+        # save_strategy=config["save_strategy"],
+        save_total_limit=config["save_total_limit"],
         fp16=config["use_fp16"],
         label_names=["task_labels"],
         report_to="wandb",
@@ -286,19 +368,6 @@ if __name__ == "__main__":
 
     data_collator = BaselineDataCollator(concept_label_dim=BINARY_FEATURE_DIM)
     callbacks = []
-    
-    # if config.get("use_lambda_callback", False):
-    #     # Calculate max steps for the scheduler
-    #     num_update_steps_per_epoch = len(dataset["train"]) // training_args.per_device_train_batch_size
-    #     max_steps = math.ceil(training_args.num_train_epochs * num_update_steps_per_epoch)
-
-    #     lambda_scheduler = LambdaSchedulerCallback(
-    #         initial_lambda=config["initial_lambda"],
-    #         final_lambda=config["final_lambda"],
-    #         max_steps=max_steps,
-    #         schedule=config["schedule"]
-    #     )
-    #     callbacks.append(lambda_scheduler)
     
     trainer = Trainer(
         model=model,
@@ -311,9 +380,13 @@ if __name__ == "__main__":
         callbacks=callbacks
     )
 
-    trainer.train()
+    if not run_eval_only:
+        trainer.train()
 
     test_results = trainer.predict(dataset["test"])
     print(test_results.metrics)
+
+    if config.get("save_test_results", False):
+        save_test_outputs(config, test_results)
 
     wandb_run.finish()

@@ -10,7 +10,7 @@ fb_labels        = {"b": "Back", "f": "Front", "n": "Neutral", "s_fb": "silence_
 round_labels     = {"u": "Unrounded", "r": "Rounded", "s_r": "silence_round"}
 central_labels   = {"c": "Central", "f": "Full", "n": "nil", "s_c": "silence_central"}
 
-# Data extracted from the King & Taylor Appendix (MV System) 
+# Data extracted from the King & Taylor Appendix (MV System)
 mv_data = {
     # Phoneme: [phonation, manner, place, front-back, roundness, centrality]
     "aa":   ["v", "v", "lo", "b", "u", "c"],

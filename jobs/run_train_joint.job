@@ -4,9 +4,20 @@
 #SBATCH --gpus=1
 #SBATCH --job-name=run_train_joint
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=9
-#SBATCH --time=02:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --time=00:20:00
 #SBATCH --output=outputs/run_train_joint_%A.out
+
+
+mkdir -p "$TMPDIR/processed_datasets"
+cp -r "/gpfs/home6/aeichholtz/msc-thesis/datasets/processed_timit_dataset-joint" \
+	"$TMPDIR/processed_datasets/processed_timit_dataset-joint"
+
+export PROCESSED_DATASET_PATH_JOINT="$TMPDIR/processed_datasets/processed_timit_dataset-joint"
+
+export HF_HOME="$TMPDIR/hf_home"
+export HF_DATASETS_CACHE="$TMPDIR/hf_datasets"
+export TRANSFORMERS_CACHE="$TMPDIR/hf_models"
 
 module purge
 module load 2023

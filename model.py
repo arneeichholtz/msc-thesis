@@ -51,8 +51,11 @@ class Wav2Vec2ForArticulatoryFeatures(Wav2Vec2PreTrainedModel):
         input_values: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
+        concept_labels: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> SequenceClassifierOutput:
+        if labels is None and concept_labels is not None:
+            labels = concept_labels
         outputs = self.wav2vec2(
             input_values,
             attention_mask=attention_mask,
@@ -263,7 +266,7 @@ class Wav2Vec2ForJointBottleneck(Wav2Vec2PreTrainedModel):
 
         loss = None
         if task_loss is not None and concept_loss is not None:
-            loss =  task_loss + self.joint_lambda * concept_loss
+            loss = task_loss + self.joint_lambda * concept_loss
         elif task_loss is not None:
             loss = task_loss
         elif concept_loss is not None:
