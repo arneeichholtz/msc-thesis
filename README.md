@@ -198,9 +198,3 @@ python train_baseline.py
 ```bash
 python probe.py
 ```
-
-## Tips and troubleshooting
-
-- If GPU memory is constrained: lower `per_device_train_batch_size` or enable gradient accumulation in training scripts (if implemented).
-- If you encounter dataset auth/acceptance errors when calling `datasets.load_dataset('timit_asr')`, follow the Hugging Face datasets prompts to accept TIMIT licensing.
-- For reproducibility, set seeds in the training scripts (look for `seed` in the codebase) and pin `transformers` and `datasets` versions in `requirements.txt`.
