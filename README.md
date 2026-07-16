@@ -2,7 +2,7 @@
 
 This repository adapts `facebook/wav2vec2-base` into a Concept Bottleneck Model (CBM) for frame-level articulatory feature prediction on the TIMIT corpus. The model predicts structured articulatory feature vectors (phonation, manner, place, etc.) per frame instead of phoneme IDs.
 
-This README was updated to document every option in `config.yml` and map each option to the Python scripts that use it. Use the examples below to prepare data, run training and evaluation, and inspect results.
+Use the examples below to prepare data, run training and evaluation, and inspect results.
 
 **Quick start (recommended)**
 
