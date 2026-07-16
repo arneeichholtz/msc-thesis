@@ -193,13 +193,7 @@ python train_joint.py
 python train_baseline.py
 ```
 
-- Run evaluation/test using saved checkpoints and generate outputs in `data_outputs/`:
-
-```bash
-python test.py
-```
-
-- Run probes and diagnostics (feature extraction, analysis):
+- Run probes to predict features:
 
 ```bash
 python probe.py
@@ -210,10 +204,3 @@ python probe.py
 - If GPU memory is constrained: lower `per_device_train_batch_size` or enable gradient accumulation in training scripts (if implemented).
 - If you encounter dataset auth/acceptance errors when calling `datasets.load_dataset('timit_asr')`, follow the Hugging Face datasets prompts to accept TIMIT licensing.
 - For reproducibility, set seeds in the training scripts (look for `seed` in the codebase) and pin `transformers` and `datasets` versions in `requirements.txt`.
-
-If you want, I can:
-- Add example command-line flags to each training script to override `config.yml` values.
-- Add a short `scripts/` folder with example `bash` jobs to run common experiments.
-
----
-Updated README to document config.yml options and script mappings. If you want a more compact quick-reference table or auto-generated help extracted from the code, tell me which format you prefer.
